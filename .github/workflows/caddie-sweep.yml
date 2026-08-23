@@ -1,0 +1,75 @@
+name: caddie-sweep
+
+# Builds Caddie hole packs from OpenStreetMap and upserts them into Supabase.
+# Six parallel lanes shard the catalog by course-key hash; each lane is its own
+# runner (own IP, own Overpass mirror), so the sweep runs ~6x faster while each
+# lane stays polite. Resumable AND self-upgrading: a course is skipped only if
+# it was swept at the current generator version (GEN in sweep.py), so bumping
+# GEN makes the schedule re-build every pack with the new logic.
+
+on:
+  workflow_dispatch:
+    inputs:
+      market:
+        description: "market_key to sweep (e.g. long_island) — or 'all'"
+        required: true
+        default: "all"
+      course:
+        description: "single course key (overrides market; use with force to refresh one course)"
+        required: false
+        default: ""
+      limit:
+        description: "max courses per lane (safety valve)"
+        required: false
+        default: "10000"
+      force:
+        description: "re-sweep courses already done (true/false)"
+        required: false
+        default: "false"
+  schedule:
+    - cron: "25 */6 * * *"   # relaunch every 6h until the catalog is done
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
+    concurrency:
+      group: caddie-sweep-lane-${{ matrix.shard }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Imagery deps (NAIP stage)
+        run: pip install --quiet pillow numpy
+
+      - name: Sweep (lane ${{ matrix.shard }} of 6)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SWEEP_SLEEP: "1.8"
+          SWEEP_MIRROR: "${{ matrix.shard }}"
+          MARKET: ${{ github.event.inputs.market || 'all' }}
+          COURSE: ${{ github.event.inputs.course || '' }}
+          LIMIT: ${{ github.event.inputs.limit || '10000' }}
+          FORCE: ${{ github.event.inputs.force || 'false' }}
+        run: |
+          ARGS="--limit $LIMIT --shard ${{ matrix.shard }}/6"
+          if [ -n "$COURSE" ]; then
+            ARGS="$ARGS --course $COURSE"
+          elif [ "$MARKET" != "all" ]; then
+            ARGS="$ARGS --market $MARKET"
+          else
+            ARGS="$ARGS --all"
+          fi
+          if [ "$FORCE" = "true" ]; then
+            ARGS="$ARGS --force"
+          fi
+          python caddie/sweep.py $ARGS
