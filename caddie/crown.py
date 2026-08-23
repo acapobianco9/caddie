@@ -284,9 +284,19 @@ def render_hole(p, course_name):
     # fences & walls (owner-picked F1): post-and-rail — one timber rail with
     # posts stepping along the true line
     for fl in ((p.get('fences') or []) if DRAW_FENCES else []):
-        P = [PX(tuple(q)) for q in fl]
-        if len(P) < 2:
+        if len(fl) < 2:
             continue
+        # A fence that closes on itself is an enclosure — tennis courts, a
+        # maintenance yard, a pool. It is scenery, not something you play over,
+        # and at hole scale a 100-yard ring of posts reads like a bunker. Skip
+        # rings and stubs; keep the open runs, which are real boundaries.
+        if math.hypot(fl[0][0]-fl[-1][0], fl[0][1]-fl[-1][1]) < 6:
+            continue
+        run = sum(math.hypot(fl[i+1][0]-fl[i][0], fl[i+1][1]-fl[i][1])
+                  for i in range(len(fl)-1))
+        if run < 25:
+            continue
+        P = [PX(tuple(q)) for q in fl]
         S.append(f'<path class="rail" d="{catmull(P)}"/>')
         fR = random.Random(hid*29 + int(P[0][0]))
         cum = 0.0; nextat = 9.0
