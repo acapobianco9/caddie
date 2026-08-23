@@ -1,0 +1,41 @@
+name: render-course
+
+# Renders one stored course into demo/<course_key>.html using the canonical
+# Crown spec (caddie/crown.py) and commits the page back to the repo, so a
+# finished course can be reviewed without a local database.
+
+on:
+  workflow_dispatch:
+    inputs:
+      course:
+        description: "course_key to render (e.g. montauk_downs)"
+        required: true
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Render the course
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          COURSE: ${{ github.event.inputs.course }}
+        run: python caddie/preview_course.py "$COURSE"
+
+      - name: Commit the page
+        env:
+          COURSE: ${{ github.event.inputs.course }}
+        run: |
+          git config user.name "caddie-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add demo/
+          git commit -m "render: $COURSE" || echo "nothing to commit"
+          git push
