@@ -24,6 +24,11 @@ import json, math, random, sys
 
 VW, VH = 334, 430
 
+# Structures are OFF for this iteration (owner call, Aug 23 2026). The shed
+# hand and the plan-view footprint both stay in the file; flip this to True
+# to bring buildings back without touching the renderer.
+DRAW_STRUCTURES = False
+
 
 def catmull(P, closed=False):
     n = len(P)
@@ -217,7 +222,7 @@ def render_hole(p, course_name):
     # structures (owner-picked S3): small buildings draw as the shed doodle;
     # big footprints keep straight plan-view edges + ridge so a clubhouse
     # never wears a tiny shed costume
-    for bl in (p.get('bldgs') or []):
+    for bl in ((p.get('bldgs') or []) if DRAW_STRUCTURES else []):
         P = [PX(tuple(q)) for q in bl]
         bx0 = min(q[0] for q in P); bx1 = max(q[0] for q in P)
         by0 = min(q[1] for q in P); by1 = max(q[1] for q in P)
