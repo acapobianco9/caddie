@@ -13,7 +13,7 @@ spruce / broad, mixed 5:3:2), the three fescue hands (fan / arc / sedge,
 mixed 4:3:3), the measured-density curve (tuft spacing 44-34d yd, skip
 0.68-0.6d, size x(0.72+0.55d) where d = imagery coverage fraction), the
 straw palette (#A2925A / #877947), and every hazard mark below (streams,
-rock, hedges, cart paths, buildings, specimen trees, elevation readout).
+rock, hedges, buildings, specimen trees, elevation readout).
 Owner-picked hands, Aug 23 2026: rocks R1 (river-stone cluster + scree),
 structures S3 (shed doodle under 30 px span, plan footprint above),
 fences/walls F1 (post-and-rail); hedges stay the green stitch.
@@ -26,6 +26,9 @@ the driver corridor, tightening to 26 yd into the green). No dogleg
 fallback, no automatic par-3 backdrop, no decorative filler. A hole whose
 timber was never mapped shows no timber — an empty margin is the honest
 answer, and the fix is better data (3DEP lidar canopy), never a guess.
+The same gate governs every optional mark: specimen trees and hedges draw
+only inside the miss cone, and cart paths are not drawn at all — ground
+furniture nobody aims at, nobody carries, and nobody plans around.
 
     python caddie/crown.py packs.json "Course Name" out.html
 """
@@ -229,9 +232,7 @@ def render_hole(p, course_name):
         S.append(f'<ellipse cx="{gcx:.0f}" cy="{gcy:.0f}" rx="{r1:.0f}" ry="{r1*0.68:.0f}" fill="var(--turf-1)" stroke="var(--ink)" stroke-opacity=".07" stroke-width="1"/>')
         S.append(f'<ellipse cx="{gcx:.0f}" cy="{gcy:.0f}" rx="{r2:.0f}" ry="{r2*0.67:.0f}" fill="var(--turf-2)" stroke="var(--ink)" stroke-opacity=".15" stroke-width="1"/>')
     # cart paths first: they run under everything
-    for pl in (p.get('paths') or []):
-        P = [PX(tuple(q)) for q in pl]
-        S.append(f'<path class="cpath" d="{catmull(P)}"/>')
+    # cart paths are NOT drawn: ground furniture, never in play (owner rule).
     # structures (owner-picked S3): small buildings draw as the shed doodle;
     # big footprints keep straight plan-view edges + ridge so a clubhouse
     # never wears a tiny shed costume
@@ -649,7 +650,6 @@ body{font-family:'Archivo',sans-serif;background:var(--paper);color:var(--ink);p
 .holeart .flagp{fill:var(--accent);stroke:var(--forest-d);stroke-width:.9}
 .holeart .cone{fill:var(--wood);stroke:var(--ink);stroke-width:1;stroke-linejoin:round;vector-effect:non-scaling-stroke}
 .holeart .cone-d{fill:var(--wood-d);stroke:var(--ink);stroke-width:1;stroke-linejoin:round;stroke-opacity:.75;vector-effect:non-scaling-stroke}
-.holeart .cpath{stroke:#CFC6AF;fill:none;stroke-width:2.6;stroke-dasharray:7 5;stroke-linecap:round;opacity:.8}
 .holeart .bldg{fill:#DEDACD;stroke:var(--ink);stroke-opacity:.28;stroke-width:1}
 .holeart .strm-o{stroke:var(--ink);fill:none;stroke-width:6;stroke-opacity:.18;stroke-linecap:round}
 .holeart .strm{stroke:#9FBBC9;fill:none;stroke-width:4;stroke-linecap:round}
