@@ -96,18 +96,47 @@ def pip(pt, poly):
         j = i
     return inside
 
-# three tree hands: the classic two-tier conifer, a taller three-tier spruce,
-# and a round broadleaf — mixed by seeded chance so no two stands read alike
-CONE = "M0,-15 l7,10 h-4 l6,9 h-18 l6,-9 h-4 z"
-SPRUCE = "M0,-21 l5,7 h-3 l5,7 h-3.5 l6,8 h-19 l6,-8 h-3.5 l5,-7 h-3 z"
-def cone_svg(x, y, s, cls, kind='cone'):
+# THREE tree hands, and one species per cluster (owner, Aug 24 2026). The old
+# behaviour mixed cone, spruce and round broadleaf inside a single stand at two
+# size regimes, and the result read as clip art rather than timber. Now a
+# cluster picks ONE hand and keeps it.
+#
+# On honesty: OSM almost never says what species a tree is — of Bethpage's
+# 1,106 mapped trees, none carry leaf_type, genus or species. So the pine/oak
+# choice is ours. That is allowed here where a bunker would not be, because
+# species does not change how the hole is played: the claim the card makes is
+# "there is timber here and it can catch your ball", and that claim is true
+# either way. The choice is SEEDED from course + hole + cluster so a given
+# clump is always the same species, and a real OSM tag would override it.
+PINE = "M0,-15 l7,10 h-4 l6,9 h-18 l6,-9 h-4 z"
+OAK = ("M-9,-1 A4.3,4.3 0 0,1 -6.4,-7.4 A4.7,4.7 0 0,1 0.2,-10.6 "
+       "A4.5,4.5 0 0,1 6.8,-7.0 A4.3,4.3 0 0,1 9,-0.8 A5.2,5.2 0 0,1 0,2.6 "
+       "A5.2,5.2 0 0,1 -9,-1 Z")
+PALM_FRONDS = ("M0,-7 C-4,-11 -8,-11.6 -11,-9.4 M0,-7 C-3,-12.6 -6.6,-14.6 -9,-14.6 "
+               "M0,-7 C0.4,-13 -1,-16 -3,-17.6 M0,-7 C2,-12.6 5,-14.6 7.4,-14.4 "
+               "M0,-7 C4,-10.6 8,-11.4 10.8,-9.6")
+
+# Where palms are the honest default. A regional inference, deliberately made
+# and deliberately narrow: it holds only where a golfer standing on the tee
+# would not notice it was inferred. The desert Southwest and south Florida
+# pass that test. California does NOT — Monterey is cypress, NorCal is oak,
+# the LA basin is eucalyptus — so no California market is listed here, and
+# central and north Florida (orlando, tampa, jacksonville) are pine and oak
+# country and are left out too.
+PALM_MARKETS = {'phoenix', 'tucson', 's_az', 'palm_springs', 'las_vegas', 's_nv',
+                'south_florida', 'palm_beach', 'fort_myers', 's_fl'}
+
+def species_pair(market):
+    return ('palm', 'oak') if (market or '') in PALM_MARKETS else ('oak', 'pine')
+
+def cone_svg(x, y, s, cls, kind='oak'):
     g = f'<g transform="translate({x:.1f},{y-11*s:.1f}) scale({s:.3f})">'
-    if kind == 'spruce':
-        return g + f'<path class="{cls}" d="{SPRUCE}"/><path class="trunk" d="M0,4 v7"/></g>'
-    if kind == 'broad':
-        return (g + f'<ellipse class="{cls}" cx="0" cy="-3" rx="7.6" ry="7"/>'
-                    f'<path class="trunk" d="M0,4 v7"/></g>')
-    return g + f'<path class="{cls}" d="{CONE}"/><path class="trunk" d="M0,4 v7"/></g>'
+    if kind == 'palm':
+        return (g + f'<path class="frond" d="{PALM_FRONDS}"/>'
+                    f'<path class="trunk" d="M0,11 C1.6,4 1.6,-2 0.6,-6.6"/></g>')
+    if kind == 'pine':
+        return g + f'<path class="{cls}" d="{PINE}"/><path class="trunk" d="M0,4 v7"/></g>'
+    return g + f'<path class="{cls}" d="{OAK}"/><path class="trunk" d="M0,2 v9"/></g>'
 
 # three fescue hands: a full seven-blade fan, a sparser wind-leaned arc, and a
 # low sedge clump — mixed the same way, so the long grass looks grown, not tiled
@@ -152,7 +181,7 @@ def tuft_svg(x, y, s, cls, kind='fan'):
             f'<path class="{cls}" d="{TUFTS[kind]}"/>{seeds}</g>')
 
 
-def render_hole(p, course_name):
+def render_hole(p, course_name, market=''):
     line = [tuple(q) for q in p['line']]
     total = arclen(line)
     par = p['par']
@@ -417,8 +446,10 @@ def render_hole(p, course_name):
     treeR = random.Random(hid*7+3)
     planted = []
     fwpx = max(20, min(58, 34*sc)); rghpx = fwpx*1.55
-    TREE_MIX = ['cone']*5 + ['spruce']*3 + ['broad']*2
-    for st in p['stands']:
+    PAIR = species_pair(market)
+    seed0 = sum(ord(ch) for ch in (course_name or '')) + hid * 7
+    for si, st in enumerate(p['stands']):
+        kind = PAIR[(seed0 + si) % len(PAIR)]
         if st['side'] == 0 and gP:
             gcx = sum(q[0] for q in gP)/len(gP); gcy = sum(q[1] for q in gP)/len(gP)
             gr = max(max(q[0] for q in gP)-gcx, gcy-min(q[1] for q in gP))
@@ -428,7 +459,7 @@ def render_hole(p, course_name):
                     tx, ty = gcx+rr2*math.cos(aa), gcy+rr2*math.sin(aa)*0.8
                     s = scl*(0.84+treeR.random()*0.32)
                     if not occupied(tx, ty, s):
-                        planted.append((tx, ty, s, cls, treeR.choice(TREE_MIX)))
+                        planted.append((tx, ty, s, cls, kind))
         elif st['side'] != 0:
             for i in range(st['count']):
                 a = st['a0']+(st['a1']-st['a0'])*(i+0.5)/st['count']
@@ -441,7 +472,7 @@ def render_hole(p, course_name):
                     tx, ty = px0+nx*offj, py0+ny*offj
                     s = scl*(0.84+treeR.random()*0.32)
                     if not occupied(tx, ty, s):
-                        planted.append((tx, ty, s, cls, treeR.choice(TREE_MIX)))
+                        planted.append((tx, ty, s, cls, kind))
     planted.sort(key=lambda t: t[1])
     for tx, ty, s, cls, kind in planted:
         S.append(cone_svg(tx, ty, s, cls, kind))
@@ -492,8 +523,8 @@ def render_hole(p, course_name):
     specR = random.Random(hid * 11 + 5)
     for tp in (p.get('trees_pt') or []):
         tx, ty = PX(tuple(tp))
-        S.append(cone_svg(tx, ty, 1.15 + specR.random()*0.25, 'cone',
-                          specR.choice(['broad', 'broad', 'cone', 'spruce'])))
+        S.append(cone_svg(tx, ty, 1.0 + specR.random()*0.18, 'cone',
+                          species_pair(market)[0]))
     # elevation chevrons: three fading arrows beside the approach — the
     # direction of the climb at a glance, the number stays in type
     if abs(ev0) >= 8 and par > 3 and total > 120:
@@ -732,6 +763,7 @@ body{font-family:'Archivo',sans-serif;background:var(--paper);color:var(--ink);p
 .holeart .arc{stroke:var(--muted);fill:none;stroke-width:.8;opacity:.2;stroke-dasharray:3 4}
 .holeart .arclab{font-family:'Archivo',sans-serif;font-weight:700;font-size:7.5px;fill:var(--faint);letter-spacing:.08em}
 .holeart .flagp{fill:var(--accent);stroke:var(--forest-d);stroke-width:.9}
+.holeart .frond{fill:none;stroke:var(--ink);stroke-width:1;stroke-linecap:round;vector-effect:non-scaling-stroke}
 .holeart .cone{fill:var(--wood);stroke:var(--ink);stroke-width:1;stroke-linejoin:round;vector-effect:non-scaling-stroke}
 .holeart .cone-d{fill:var(--wood-d);stroke:var(--ink);stroke-width:1;stroke-linejoin:round;stroke-opacity:.75;vector-effect:non-scaling-stroke}
 .holeart .bldg{fill:#DEDACD;stroke:var(--ink);stroke-opacity:.28;stroke-width:1}
@@ -809,8 +841,11 @@ def main():
     packs = json.load(open(sys.argv[1]))
     cname = sys.argv[2] if len(sys.argv) > 2 else 'Course'
     out = sys.argv[3] if len(sys.argv) > 3 else 'caddie-crown.html'
+    # optional 4th arg: the course's market key, which decides whether palms
+    # are the honest local default (see PALM_MARKETS)
+    market = sys.argv[4] if len(sys.argv) > 4 else ''
     packs = sorted(packs, key=lambda p: p['hole'])
-    cards = ''.join(render_hole(p, cname) for p in packs)
+    cards = ''.join(render_hole(p, cname, market) for p in packs)
     # the watch: pick the most characterful par 4 — a severe bend if one exists
     wp = next((p for p in packs if p['par'] == 4 and p['bend'] and ((p.get('facts') or {}).get('bend') or {}).get('severe')),
               next((p for p in packs if p['par'] == 4), packs[0]))
