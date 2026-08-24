@@ -182,6 +182,21 @@ def rnd_pts(pts, nd=1):
 
 # ---------------- per-hole build ----------------
 
+def _miss_cone(arc, total):
+    """How far off the playing line a shot can plausibly finish at this point.
+
+    The one gate every optional feature passes through (owner rule, Aug 24
+    2026): a thing is drawn only if it exists AND could change how the hole is
+    played. Wide through the driver corridor, tighter as the shot shortens in.
+    """
+    to_green = total - arc
+    if to_green < 60:
+        return 26.0
+    if to_green < 120:
+        return 32.0
+    return 45.0
+
+
 def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
     line_ll = hole['l']
     if len(line_ll) < 2:
@@ -238,15 +253,13 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
             d = dmin
         elif t == 'r':      # bare rock / scree / stone
             if d > 60 or far < 10 or near > total + 20: continue
-        elif t == 'T':      # specimen tree (single point)
-            if not (d < 45 and 20 < arc < total + 10): continue
-        elif t == 'p':      # cart path / track
+        elif t == 'T':      # specimen tree — only if it can catch a shot
+            if not (d <= _miss_cone(arc, total) and 20 < arc < total + 10):
+                continue
+        elif t == 'h':      # hedge — only where it can catch a shot
             dmin = min(line_dist(p, line)[0] for p in g)
-            if dmin > 55: continue
-            d = dmin
-        elif t == 'h':      # hedge / wall / fence
-            dmin = min(line_dist(p, line)[0] for p in g)
-            if dmin > 55: continue
+            amin = min(line_dist(p, line)[1] for p in g)
+            if dmin > _miss_cone(amin, total): continue
             d = dmin
         elif t == 'n':      # wall / fence (built barrier)
             dmin = min(line_dist(p, line)[0] for p in g)
@@ -308,7 +321,6 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
     streams = [f for f in keep if f['t'] == 'S']
     rocks = [f for f in keep if f['t'] == 'r']
     trees_pt = [f for f in keep if f['t'] == 'T']
-    paths = [f for f in keep if f['t'] == 'p']
     hedges = [f for f in keep if f['t'] == 'h']
     fences = [f for f in keep if f['t'] == 'n']
     bldgs = [f for f in keep if f['t'] == 'u']
@@ -391,16 +403,6 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
     # is gone; so is the unconditional par-3 backdrop ring.
     PROBES = (14.0, 22.0, 30.0, 38.0, 46.0, 55.0)
 
-    def _play_width(a):
-        """How far off the line a miss can plausibly travel at this point:
-        wide through the driver corridor, tighter as the shot shortens in."""
-        to_green = total - a
-        if to_green < 60:
-            return 26.0
-        if to_green < 120:
-            return 32.0
-        return 45.0
-
     def _dir(a):
         cum = 0.0
         for i in range(len(line) - 1):
@@ -426,7 +428,7 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
         a = 40.0
         while a < total - 12:
             gap = _wood_gap(a, side)
-            if gap is not None and gap <= _play_width(a):
+            if gap is not None and gap <= _miss_cone(a, total):
                 run = [run[0], a] if run else [a, a]
             else:
                 if run and run[1] - run[0] >= 30:
@@ -510,7 +512,6 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
         'streams': [rnd_pts(s['g']) for s in streams[:4]],
         'rocks': [rnd_pts(r['g']) for r in rocks[:6]],
         'trees_pt': [[round(f['c'][0], 1), round(f['c'][1], 1)] for f in trees_pt[:10]],
-        'paths': [rnd_pts(f['g']) for f in paths[:6]],
         'hedges': [rnd_pts(f['g']) for f in hedges[:4]],
         'fences': [rnd_pts(f['g']) for f in fences[:5]],
         'bldgs': [rnd_pts(f['g']) for f in bldgs[:4]],
