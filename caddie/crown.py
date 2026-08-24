@@ -650,7 +650,7 @@ body{font-family:'Archivo',sans-serif;background:var(--paper);color:var(--ink);p
 .hd-top{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
 .hd-id{display:flex;align-items:baseline;gap:9px}
 .hd-no{font-family:'Fraunces',Georgia,serif;font-weight:700;font-size:34px;line-height:.9;color:var(--forest);letter-spacing:-.02em}
-.hd-par{display:block;font-family:'Fraunces',Georgia,serif;font-weight:700;font-size:18px;line-height:1.1;letter-spacing:0;text-transform:none;color:var(--ink-2);margin-bottom:1px}
+.hd-par{display:block;font-family:'Fraunces',Georgia,serif;font-weight:700;font-size:34px;line-height:.9;letter-spacing:-.02em;text-transform:none;color:var(--ink-2);margin-bottom:4px}
 .hd-spec{font-size:10px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);line-height:1.5}
 .prov{margin-top:5px;font-size:8px;font-weight:700;letter-spacing:.14em;color:#A8552A;border:1px solid #A8552A55;border-radius:4px;padding:2px 6px;display:inline-block}
 .hd-dist{text-align:right;line-height:1}
