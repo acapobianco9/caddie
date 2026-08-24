@@ -64,8 +64,19 @@ def get_catalog(market=None, course=None, limit=None):
         params += f'&market_key=eq.{market}'
     if course:
         params += f'&key=eq.{course}'
-    params += f'&limit={limit or 10000}'
-    rows = rest('GET', 'courses', params=params) or []
+    # PostgREST caps ANY single response at 1000 rows, whatever limit asks for,
+    # so page explicitly. Without this the sweep only ever saw the first 1000
+    # courses in the catalog and reported itself finished.
+    rows, page = [], 0
+    while True:
+        batch = rest('GET', 'courses',
+                     params=params + f'&order=key.asc&limit=1000&offset={page * 1000}') or []
+        rows += batch
+        if len(batch) < 1000 or (limit and len(rows) >= limit):
+            break
+        page += 1
+    if limit:
+        rows = rows[:limit]
     out = []
     for r in rows:
         info = r.get('info') or {}
