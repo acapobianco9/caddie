@@ -31,8 +31,10 @@ def _get_all(path):
 def main():
     cov = _get_all('course_coverage?select=course_key,status'
                    '&status=in.(full,partial)&order=course_key.asc')
-    names = {c['key']: c.get('name') or c['key']
-             for c in _get_all('courses?select=key,name&order=key.asc')}
+    cs = _get_all('courses?select=key,name,market_key&order=key.asc')
+    names = {c['key']: c.get('name') or c['key'] for c in cs}
+    # the market decides the local tree vocabulary (see crown.PALM_MARKETS)
+    mkts = {c['key']: c.get('market_key') or '' for c in cs}
     rows = _get_all('course_holes?select=course_key,hole,pack'
                     '&order=course_key.asc,hole.asc')
     packs = collections.defaultdict(list)
@@ -54,7 +56,7 @@ def main():
             json.dump(ps, f)
         out = os.path.join(SITE, 'demo', f'{k}.html')
         subprocess.run([sys.executable, os.path.join(HERE, 'crown.py'),
-                        tmp, names.get(k, k), out], check=True,
+                        tmp, names.get(k, k), out, mkts.get(k, '')], check=True,
                        stdout=subprocess.DEVNULL)
         os.remove(tmp)
         items.append((names.get(k, k), k, len(ps), c['status']))
