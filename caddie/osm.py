@@ -104,27 +104,33 @@ def fetch_course(key, name, market, lat, lng, pad=0.020, mirror=0):
     time.sleep(1.0)
     pc = pad * 0.8
     bc = f'{lat - pc},{lng - pc},{lat + pc},{lng + pc}'
+    # tree rows come back with the woodland. A golf course is far more often
+    # mapped as rows and individual trees than as a wood polygon — reading
+    # only polygons is what starved the honest tree rule (GEN 6, Aug 24 2026).
     qc = (f'[out:json][timeout:60];('
           f'way["natural"="water"]({bc});way["waterway"="riverbank"]({bc});'
-          f'way["natural"="wood"]({bc});way["landuse"="forest"]({bc}););out geom;')
+          f'way["natural"="wood"]({bc});way["landuse"="forest"]({bc});'
+          f'way["natural"="tree_row"]({bc}););out geom;')
     try:
         jc = _try_overpass(qc, tries=2, base_mirror=mirror)
-        nw = nx = 0
+        nw = nx = nr = 0
         for e in jc.get('elements', []):
-            if not e.get('geometry') or len(e['geometry']) < 4:
+            if not e.get('geometry'):
                 continue
             tags = e.get('tags', {}) or {}
-            is_wood = tags.get('natural') == 'wood' or tags.get('landuse') == 'forest'
-            t = 'x' if is_wood else 'w'
-            eps = 0.00012 if is_wood else 0.00004
-            if t == 'x' and nx >= 80:
-                continue
-            if t == 'w' and nw >= 120:
+            if tags.get('natural') == 'tree_row':
+                t, eps, minpts, cap, have = 'X', 0.00008, 2, 60, nr
+            elif tags.get('natural') == 'wood' or tags.get('landuse') == 'forest':
+                t, eps, minpts, cap, have = 'x', 0.00012, 4, 80, nx
+            else:
+                t, eps, minpts, cap, have = 'w', 0.00004, 4, 120, nw
+            if len(e['geometry']) < minpts or have >= cap:
                 continue
             g = _dp([[round(p['lat'], 5), round(p['lon'], 5)] for p in e['geometry']], eps)
-            if len(g) >= 4:
+            if len(g) >= minpts:
                 feats.append([t, g])
-                if is_wood: nx += 1
+                if t == 'x': nx += 1
+                elif t == 'X': nr += 1
                 else: nw += 1
     except Exception:
         pass  # golf-only pack is still a good pack
@@ -142,7 +148,9 @@ def fetch_course(key, name, market, lat, lng, pad=0.020, mirror=0):
           f');out geom;')
     try:
         jh = _try_overpass(qh, tries=2, base_mirror=mirror)
-        caps = {'S': 40, 'r': 40, 'h': 40, 'n': 60, 'p': 80, 'u': 60, 'T': 120}
+        # tree NODES are one coordinate each and are the main way a course's
+        # timber gets mapped, so they get a generous cap (GEN 6).
+        caps = {'S': 40, 'r': 40, 'h': 40, 'n': 60, 'p': 80, 'u': 60, 'T': 400}
         cnt = {k: 0 for k in caps}
         for e in jh.get('elements', []):
             tags = e.get('tags', {}) or {}
