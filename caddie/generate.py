@@ -217,12 +217,16 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
     xl = extend_line(line, 80)
 
     keep = []
-    wds = []
+    wds = []       # woodland polygons
+    trows = []     # natural=tree_row lines
+    tpts = []      # every mapped natural=tree node, gate or no gate
     fwys = []
     for t, g_ll in feats:
         g = rot(project(g_ll, lat0, lon0), ang)
         if t == 'x':
             wds.append(g); continue
+        if t == 'X':
+            trows.append(g); continue
         if t == 'F':
             if min(line_dist(p, line)[0] for p in g) < 45:
                 fwys.append(g)
@@ -254,6 +258,7 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
         elif t == 'r':      # bare rock / scree / stone
             if d > 60 or far < 10 or near > total + 20: continue
         elif t == 'T':      # specimen tree — only if it can catch a shot
+            tpts.append(c)   # but EVERY tree counts toward a stand
             if not (d <= _miss_cone(arc, total) and 20 < arc < total + 10):
                 continue
         elif t == 'h':      # hedge — only where it can catch a shot
@@ -412,13 +417,42 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
             cum += L
         return 0.0, -1.0
 
+    def _timber(q):
+        """Is there MAPPED timber at q? Polygon, tree row, or a tree cluster.
+
+        GEN 6, Aug 24 2026. GEN 5 read only natural=wood / landuse=forest
+        polygons, and the honest rule starved: at Bethpage Black — a course
+        walled in by oak — four holes had no wood polygon within 160 yards of
+        either side of the line, and across the whole catalog only 44 of 230
+        GEN-5 courses got a single tree. The timber was never absent, it was
+        mapped as rows and as individual trees. All three shapes are SURVEYED,
+        so reading them keeps the standing rule intact: still nothing invented.
+
+        A lone tree does not make a stand — it draws as a specimen tree if it
+        is in the way. Two within 16 yards of the same spot is a treeline.
+        """
+        if any(pip(q, wp) for wp in wds):
+            return True
+        for tr in trows:
+            if len(tr) >= 2 and min(seg_dist(q, tr[i], tr[i+1])[0]
+                                    for i in range(len(tr) - 1)) <= 12.0:
+                return True
+        if len(tpts) >= 2:
+            n = 0
+            for tp in tpts:
+                if math.hypot(q[0] - tp[0], q[1] - tp[1]) <= 16.0:
+                    n += 1
+                    if n >= 2:
+                        return True
+        return False
+
     def _wood_gap(a, side):
         """Distance at which timber first appears off `side`, or None."""
         p = point_at_arc(line, a)
         dx, dy = _dir(a)
         for d in PROBES:
             q = (p[0] - dy*side*d, p[1] + dx*side*d)
-            if any(pip(q, wp) for wp in wds):
+            if _timber(q):
                 return d
         return None
 
@@ -446,8 +480,8 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
     if has_green and not stands:
         gc = centroid(greens[0]['g'])
         dxb, dyb = _dir(max(0.0, total - 5))
-        if any(pip((gc[0] + dxb*d, gc[1] + dyb*d), wp)
-               for d in (18.0, 30.0, 42.0) for wp in wds):
+        if any(_timber((gc[0] + dxb*d, gc[1] + dyb*d))
+               for d in (18.0, 30.0, 42.0)):
             stands = [{'side': 0, 'a0': -1, 'a1': -1, 'count': 4}]
 
     tier = 'A' if (has_green and (bunkers or waters)) else ('B' if has_green else 'C')
