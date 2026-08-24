@@ -18,6 +18,15 @@ Owner-picked hands, Aug 23 2026: rocks R1 (river-stone cluster + scree),
 structures S3 (shed doodle under 30 px span, plan footprint above),
 fences/walls F1 (post-and-rail); hedges stay the green stitch.
 
+STANDING RULE, owner, Aug 24 2026 — NOTHING ON THE CARD IS INVENTED.
+A feature is drawn only when the survey says it is there AND it can change
+how the hole is played. Trees are the test case: timber draws only where it
+is mapped and sits inside the miss cone (about 45 yd off the line through
+the driver corridor, tightening to 26 yd into the green). No dogleg
+fallback, no automatic par-3 backdrop, no decorative filler. A hole whose
+timber was never mapped shows no timber — an empty margin is the honest
+answer, and the fix is better data (3DEP lidar canopy), never a guess.
+
     python caddie/crown.py packs.json "Course Name" out.html
 """
 import json, math, random, sys
