@@ -37,7 +37,12 @@ BASE_MIRROR = int(os.environ.get('SWEEP_MIRROR', '0'))  # spread parallel lanes 
 # 3: NAIP stage 2.5 — imagery sand on sand-less holes + synthesizer green votes
 # 4: hazard scan (penalty areas, streams, rocks, specimen trees, paths,
 #    hedges, buildings) + 3DEP elevation per hole
-GEN = 5
+# 5: honest trees — timber draws only where the survey has it AND it sits
+#    inside the miss cone. No dogleg fallback, no automatic par-3 backdrop.
+# 6: trees read properly — GEN 5 saw only wood polygons, so 44 of 230 courses
+#    got a single tree. Tree rows and clusters of individual tree nodes now
+#    count too. Still detection only; the miss cone still decides.
+GEN = 6
 
 
 def rest(method, path, payload=None, params=''):
