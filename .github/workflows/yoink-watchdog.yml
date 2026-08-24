@@ -1,0 +1,25 @@
+name: yoink-watchdog
+
+# Alert-only watchdog for the tee-time engine (which runs on the VPS).
+# Lives in this public repo because Actions here is free. If the engine's
+# snapshots go stale, it pings the admin ntfy topic and fails loudly.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 * * * *"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check engine freshness
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python caddie/watchdog.py
