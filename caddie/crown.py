@@ -253,16 +253,54 @@ def render_hole(p, course_name):
         else:
             ry = (by1-by0)*0.32
             S.append(f'<line class="ridge" x1="{bcx:.1f}" y1="{bcy-ry:.1f}" x2="{bcx:.1f}" y2="{bcy+ry:.1f}"/>')
-    # streams: a creek is drawn as moving water, not a pond
-    for sl in (p.get('streams') or []):
-        P = [PX(tuple(q)) for q in sl]
-        S.append(f'<path class="strm-o" d="{catmull(P)}"/>')
-        S.append(f'<path class="strm" d="{catmull(P)}"/>')
-    # water: banded edge, same mark as the crown
+    # water first, then the creek that feeds it. OSM maps a widening more than
+    # once — a waterway=stream line running clean through the natural=water
+    # polygon it becomes, sometimes the pond itself traced twice by a way and a
+    # relation. Drawing both stacks two marks on one hazard and reads as a
+    # second, phantom feature (owner, Aug 24 2026). So: dedupe the ponds, then
+    # clip the creek where it is already inside one.
+    def _sig(pts):
+        return tuple(sorted((round(a, 1), round(b, 1)) for a, b in pts))
+
+    seen_w, wpx = set(), []
     for wply in p['waters']:
         P = [PX(tuple(q)) for q in wply]
-        S.append(f'<path class="wat" d="{catmull(P, True)}"/>')
+        k = _sig(P)
+        if k in seen_w or len(P) < 3:
+            continue
+        seen_w.add(k)
+        wpx.append(P)
+    for P in wpx:
+        dw = catmull(P, True)
+        S.append(f'<path class="wat" d="{dw}"/>')
         S.append(f'<path class="shallow" d="{catmull(scale_pts(P, 0.82), True)}"/>')
+        # the edge goes on LAST and unbroken. Pale blue on pale turf is a
+        # gradient, not a boundary — a player has to know exactly where the
+        # ball gets wet (owner, Aug 24 2026). Same treatment the bunkers get.
+        S.append(f'<path class="wat-o" d="{dw}"/>')
+
+    # streams: a creek is drawn as moving water, not a pond
+    seen_s = set()
+    for sl in (p.get('streams') or []):
+        P = [PX(tuple(q)) for q in sl]
+        k = _sig(P)
+        if k in seen_s:
+            continue
+        seen_s.add(k)
+        # break the line into the stretches that are NOT already under a pond
+        runs, run = [], []
+        for q in P:
+            if any(pip(q, wp) for wp in wpx):
+                if len(run) >= 2:
+                    runs.append(run)
+                run = []
+            else:
+                run.append(q)
+        if len(run) >= 2:
+            runs.append(run)
+        for r in runs:
+            S.append(f'<path class="strm-o" d="{catmull(r)}"/>')
+            S.append(f'<path class="strm" d="{catmull(r)}"/>')
     # rock: small features draw as a hand-drawn stone cluster; big scree
     # fields keep their surveyed outline with stones scattered inside
     rockR = random.Random(hid*13+7)
@@ -513,7 +551,7 @@ def render_hole(p, course_name):
 <div class="ph-top"><div class="ph-brand">Yoink <span>CADDIE</span></div>
 <div class="ph-meta">{course_name}</div></div>
 <div class="hd"><div class="hd-top">
-<div class="hd-id"><div class="hd-no">{hid}</div><div class="hd-spec">Par {par}<br>{yd['mid']} yds &middot; tier {p['tier']}{evtxt}</div>{'<div class="prov">PROVISIONAL &middot; GREEN SURVEYED &middot; LINE ASSUMED</div>' if p.get('synthetic') else ''}</div>
+<div class="hd-id"><div class="hd-no">{hid}</div><div class="hd-spec"><span class="hd-par">Par {par}</span>{yd['mid']} yds &middot; tier {p['tier']}{evtxt}</div>{'<div class="prov">PROVISIONAL &middot; GREEN SURVEYED &middot; LINE ASSUMED</div>' if p.get('synthetic') else ''}</div>
 <div class="hd-dist"><div class="n num">{yd['mid']}</div><div class="u">middle</div></div></div>
 <div class="fmb">
 <div><div class="k">Front</div><div class="v">{yd['front']}</div></div>
@@ -612,6 +650,7 @@ body{font-family:'Archivo',sans-serif;background:var(--paper);color:var(--ink);p
 .hd-top{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
 .hd-id{display:flex;align-items:baseline;gap:9px}
 .hd-no{font-family:'Fraunces',Georgia,serif;font-weight:700;font-size:34px;line-height:.9;color:var(--forest);letter-spacing:-.02em}
+.hd-par{display:block;font-family:'Fraunces',Georgia,serif;font-weight:700;font-size:18px;line-height:1.1;letter-spacing:0;text-transform:none;color:var(--ink-2);margin-bottom:1px}
 .hd-spec{font-size:10px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);line-height:1.5}
 .prov{margin-top:5px;font-size:8px;font-weight:700;letter-spacing:.14em;color:#A8552A;border:1px solid #A8552A55;border-radius:4px;padding:2px 6px;display:inline-block}
 .hd-dist{text-align:right;line-height:1}
@@ -639,7 +678,8 @@ body{font-family:'Archivo',sans-serif;background:var(--paper);color:var(--ink);p
 .holeart .bunk{fill:var(--sand);stroke:var(--ink);stroke-width:1.1}
 .holeart .face{fill:var(--sand-d);stroke:none}
 .holeart .bunk-o{fill:none;stroke:var(--ink);stroke-width:1.1}
-.holeart .wat{fill:var(--water-d);stroke:var(--ink);stroke-width:1.1}
+.holeart .wat{fill:var(--water-d);stroke:none}
+.holeart .wat-o{fill:none;stroke:var(--ink);stroke-width:1.4;stroke-linejoin:round}
 .holeart .shallow{fill:var(--water);stroke:none}
 .holeart .shot{stroke:var(--forest);stroke-width:1.2;stroke-dasharray:2 4;fill:none;opacity:.7}
 .holeart .disp{fill:var(--forest);opacity:.07}
