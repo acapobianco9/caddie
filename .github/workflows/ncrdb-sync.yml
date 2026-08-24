@@ -1,0 +1,36 @@
+name: ncrdb-sync
+
+# Weekly sync of real tee names / par / rating / slope from the USGA NCRDB
+# public lookup into course_tees. Facts only, politely fetched, cached 180
+# days per course. Run on demand with a single course_key to spot-fix one.
+
+on:
+  workflow_dispatch:
+    inputs:
+      course:
+        description: "course_key to sync (blank = all covered courses)"
+        required: false
+        default: ""
+  schedule:
+    - cron: "40 7 * * 1"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Sync tee data
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          COURSE: ${{ github.event.inputs.course }}
+        run: |
+          if [ -n "$COURSE" ]; then
+            python caddie/ncrdb.py "$COURSE"
+          else
+            python caddie/ncrdb.py --all
+          fi
