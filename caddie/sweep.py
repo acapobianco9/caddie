@@ -37,7 +37,7 @@ BASE_MIRROR = int(os.environ.get('SWEEP_MIRROR', '0'))  # spread parallel lanes 
 # 3: NAIP stage 2.5 — imagery sand on sand-less holes + synthesizer green votes
 # 4: hazard scan (penalty areas, streams, rocks, specimen trees, paths,
 #    hedges, buildings) + 3DEP elevation per hole
-GEN = 4
+GEN = 5
 
 
 def rest(method, path, payload=None, params=''):
