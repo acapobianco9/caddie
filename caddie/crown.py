@@ -551,7 +551,7 @@ def render_hole(p, course_name):
 <div class="ph-top"><div class="ph-brand">Yoink <span>CADDIE</span></div>
 <div class="ph-meta">{course_name}</div></div>
 <div class="hd"><div class="hd-top">
-<div class="hd-id"><div class="hd-no">{hid}</div><div class="hd-spec"><span class="hd-par">Par {par}</span>{yd['mid']} yds &middot; tier {p['tier']}{evtxt}</div>{'<div class="prov">PROVISIONAL &middot; GREEN SURVEYED &middot; LINE ASSUMED</div>' if p.get('synthetic') else ''}</div>
+<div class="hd-id"><div class="hd-nl"><div class="hd-no">{hid}</div><div class="hd-par">Par {par}</div></div><div class="hd-spec">{yd['mid']} yds &middot; tier {p['tier']}{evtxt}</div>{'<div class="prov">PROVISIONAL &middot; GREEN SURVEYED &middot; LINE ASSUMED</div>' if p.get('synthetic') else ''}</div>
 <div class="hd-dist"><div class="n num">{yd['mid']}</div><div class="u">middle</div></div></div>
 <div class="fmb">
 <div><div class="k">Front</div><div class="v">{yd['front']}</div></div>
@@ -648,10 +648,11 @@ body{font-family:'Archivo',sans-serif;background:var(--paper);color:var(--ink);p
 .ph-meta{font-size:9.5px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:var(--faint)}
 .hd{padding:14px 16px 12px;border-bottom:1px solid var(--hair-2)}
 .hd-top{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
-.hd-id{display:flex;align-items:baseline;gap:9px}
+.hd-id{display:block}
+.hd-nl{display:flex;align-items:baseline;gap:10px}
 .hd-no{font-family:'Fraunces',Georgia,serif;font-weight:700;font-size:34px;line-height:.9;color:var(--forest);letter-spacing:-.02em}
-.hd-par{display:block;font-family:'Fraunces',Georgia,serif;font-weight:700;font-size:34px;line-height:.9;letter-spacing:-.02em;text-transform:none;color:var(--ink-2);margin-bottom:4px}
-.hd-spec{font-size:10px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);line-height:1.5}
+.hd-par{font-family:'Fraunces',Georgia,serif;font-weight:700;font-size:34px;line-height:.9;letter-spacing:-.02em;text-transform:none;color:var(--ink-2)}
+.hd-spec{margin-top:7px;font-size:10px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);line-height:1.5}
 .prov{margin-top:5px;font-size:8px;font-weight:700;letter-spacing:.14em;color:#A8552A;border:1px solid #A8552A55;border-radius:4px;padding:2px 6px;display:inline-block}
 .hd-dist{text-align:right;line-height:1}
 .hd-dist .n{font-family:'Fraunces',Georgia,serif;font-weight:700;font-size:44px;letter-spacing:-.03em;line-height:.86}
