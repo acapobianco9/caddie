@@ -123,8 +123,16 @@ PALM_FRONDS = ("M0,-7 C-4,-11 -8,-11.6 -11,-9.4 M0,-7 C-3,-12.6 -6.6,-14.6 -9,-1
 # the LA basin is eucalyptus — so no California market is listed here, and
 # central and north Florida (orlando, tampa, jacksonville) are pine and oak
 # country and are left out too.
-PALM_MARKETS = {'phoenix', 'tucson', 's_az', 'palm_springs', 'las_vegas', 's_nv',
-                'south_florida', 'palm_beach', 'fort_myers', 's_fl'}
+PALM_MARKETS = {
+    # desert Southwest
+    'phoenix', 'tucson', 's_az', 'palm_springs', 'las_vegas', 's_nv',
+    # Florida south of about the 28th parallel. Tampa sits at 27.9 and is
+    # Gulf-coast palm country; Orlando (28.5) and Jacksonville (30.3) are
+    # pine and oak and are deliberately NOT here.
+    'south_florida', 'palm_beach', 'fort_myers', 'tampa', 's_fl',
+    # tropics, where this is not an inference at all
+    'hawaii_big_island', 'hawaii_kauai', 'hawaii_maui', 'hawaii_oahu', 's_pr',
+}
 
 def species_pair(market):
     return ('palm', 'oak') if (market or '') in PALM_MARKETS else ('oak', 'pine')
