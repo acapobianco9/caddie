@@ -170,6 +170,27 @@ def render_hole(p, course_name):
     tee_px = PX(line[0])
     ev0 = (p.get('facts') or {}).get('elev_ft') or 0
     S = []
+    # corner wash: three broad, soft green pools in the dead corners of the
+    # card. Ground tone, nothing more — it claims no feature, sits under every
+    # other mark, and never comes near the playing line. The card had large
+    # empty margins and they read as unfinished (owner, Aug 24 2026).
+    wr = random.Random(hid * 4451 + 9)
+
+    def wash_blob(cx, cy, rad, n=13):
+        pts = []
+        for k in range(n):
+            a = 2 * math.pi * k / n
+            rr = rad * (1 + wr.uniform(-0.17, 0.17))
+            pts.append((cx + rr * math.cos(a) * wr.uniform(.85, 1.15),
+                        cy + rr * math.sin(a) * wr.uniform(.75, 1.05)))
+        return catmull(pts, True)
+
+    S.append(f'<defs><filter id="wash{hid}" x="-40%" y="-40%" width="180%" '
+             f'height="180%"><feGaussianBlur stdDeviation="9"/></filter></defs>')
+    for wx, wy, wrad in ((VW*0.10, VH*0.14, 158), (VW*0.92, VH*0.84, 172),
+                         (VW*0.95, VH*0.18, 118)):
+        S.append(f'<path class="wash" d="{wash_blob(wx, wy, wrad)}" '
+                 f'filter="url(#wash{hid})"/>')
     # distance arcs under everything
     for ryd in ([150, 250] if par > 3 else ([100] if total > 130 else [])):
         if ryd > total-25: continue
@@ -506,6 +527,25 @@ def render_hole(p, course_name):
         else:
             S.append(f'<text class="carrylab" x="{x1-4:.0f}" y="{y+3:.0f}" text-anchor="end">{txt}</text>')
 
+    # scale bar: the one piece of card furniture that is also useful. Picks
+    # the round distance that draws between 55 and 130 px at this hole's zoom,
+    # then sits in whichever bottom corner the hole is not using.
+    for _sy in (50, 100, 150, 200):
+        _blen = _sy * sc
+        if 55 <= _blen <= 130:
+            break
+    else:
+        _sy, _blen = 100, 100 * sc
+    _by = VH - 16
+    _tee_x = PX(line[0])[0]
+    _bx = 18 if _tee_x > VW * 0.5 else VW - 18 - _blen
+    S.append(f'<g class="sbar"><line x1="{_bx:.0f}" y1="{_by}" '
+             f'x2="{_bx+_blen:.0f}" y2="{_by}"/>'
+             f'<line x1="{_bx:.0f}" y1="{_by-3}" x2="{_bx:.0f}" y2="{_by+3}"/>'
+             f'<line x1="{_bx+_blen:.0f}" y1="{_by-3}" x2="{_bx+_blen:.0f}" y2="{_by+3}"/></g>'
+             f'<text class="sbarlab" x="{_bx+_blen/2:.0f}" y="{_by-6}" '
+             f'text-anchor="middle">{_sy} YDS</text>')
+
     yd = p['yards']; depth = (yd['back']-yd['front']) if p['has_green'] else '&mdash;'
     rows = []
     if p['bend']: rows.append(('To the corner', p['bend']['at']))
@@ -686,6 +726,9 @@ body{font-family:'Archivo',sans-serif;background:var(--paper);color:var(--ink);p
 .holeart .disp{fill:var(--forest);opacity:.07}
 .holeart .carry{stroke:var(--ink);stroke-width:.9;opacity:.5;stroke-dasharray:3 3}
 .holeart .carrylab{font-family:'Archivo',sans-serif;font-weight:700;font-size:8.5px;fill:var(--ink);opacity:.85;letter-spacing:.04em;paint-order:stroke;stroke:var(--card-2);stroke-width:2.8;stroke-linejoin:round}
+.holeart .wash{fill:var(--green-s);opacity:.16;stroke:none}
+.holeart .sbar{stroke:var(--ink);stroke-width:1;opacity:.40;fill:none}
+.holeart .sbarlab{font-family:'Fraunces',Georgia,serif;font-weight:600;font-size:7.5px;fill:var(--ink);opacity:.5}
 .holeart .arc{stroke:var(--muted);fill:none;stroke-width:.8;opacity:.2;stroke-dasharray:3 4}
 .holeart .arclab{font-family:'Archivo',sans-serif;font-weight:700;font-size:7.5px;fill:var(--faint);letter-spacing:.08em}
 .holeart .flagp{fill:var(--accent);stroke:var(--forest-d);stroke-width:.9}
