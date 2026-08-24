@@ -384,46 +384,69 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
         carries.append({'kind': 'fairway', 'at': fw_start})
     carries.sort(key=lambda c: c['at'])
 
-    # conifer stands: real timber where mapped, play-logic where not
+    # conifer stands: timber that can actually catch a shot. DETECTED ONLY —
+    # a hole with no mapped woodland gets no trees at all, because inventing a
+    # treeline is the same sin as inventing a bunker (owner call, Aug 24 2026).
+    # The old dogleg fallback ("if it bends, put three trees on the inside")
+    # is gone; so is the unconditional par-3 backdrop ring.
+    PROBES = (14.0, 22.0, 30.0, 38.0, 46.0, 55.0)
+
+    def _play_width(a):
+        """How far off the line a miss can plausibly travel at this point:
+        wide through the driver corridor, tighter as the shot shortens in."""
+        to_green = total - a
+        if to_green < 60:
+            return 26.0
+        if to_green < 120:
+            return 32.0
+        return 45.0
+
+    def _dir(a):
+        cum = 0.0
+        for i in range(len(line) - 1):
+            L = math.hypot(line[i+1][0]-line[i][0], line[i+1][1]-line[i][1])
+            if cum + L >= a and L:
+                return (line[i+1][0]-line[i][0])/L, (line[i+1][1]-line[i][1])/L
+            cum += L
+        return 0.0, -1.0
+
+    def _wood_gap(a, side):
+        """Distance at which timber first appears off `side`, or None."""
+        p = point_at_arc(line, a)
+        dx, dy = _dir(a)
+        for d in PROBES:
+            q = (p[0] - dy*side*d, p[1] + dx*side*d)
+            if any(pip(q, wp) for wp in wds):
+                return d
+        return None
+
     stands = []
-    if par > 3:
-        probe_yd = 26.0
-        for side in (-1, 1):
-            run = None; a = 55
-            while a < total - 25:
-                p = point_at_arc(line, a)
-                import math as _m
-                # direction
-                cum = 0; dx = dy = None
-                for i in range(len(line) - 1):
-                    L = _m.hypot(line[i+1][0]-line[i][0], line[i+1][1]-line[i][1])
-                    if cum + L >= a:
-                        dx = (line[i+1][0]-line[i][0])/L; dy = (line[i+1][1]-line[i][1])/L
-                        break
-                    cum += L
-                if dx is None:
-                    dx, dy = 0, -1
-                q = (p[0] - dy * side * probe_yd, p[1] + dx * side * probe_yd)
-                wooded = any(pip(q, wp) for wp in wds)
-                if wooded:
-                    run = [run[0], a] if run else [a, a]
-                else:
-                    if run and run[1] - run[0] >= 50:
-                        stands.append({'side': side, 'a0': round(run[0]), 'a1': round(run[1]),
-                                       'count': max(2, min(5, int((run[1]-run[0]) / 30)))})
-                    run = None
-                a += 14
-            if run and run[1] - run[0] >= 50:
-                stands.append({'side': side, 'a0': round(run[0]), 'a1': round(run[1]),
-                               'count': max(2, min(5, int((run[1]-run[0]) / 30)))})
-        stands = sorted(stands, key=lambda r: -(r['a1'] - r['a0']))[:2]
-        if not stands and bend:
-            stands = [{'side': 1 if bdir == 'right' else -1,
-                       'a0': round(max(60, bend[0] - 35)),
-                       'a1': round(min(total - 25, bend[0] + 45)), 'count': 3}]
-    else:
-        if has_green:
-            stands = [{'side': 0, 'a0': -1, 'a1': -1, 'count': 4}]  # backdrop ring
+    for side in (-1, 1):
+        runs, run = [], None
+        a = 40.0
+        while a < total - 12:
+            gap = _wood_gap(a, side)
+            if gap is not None and gap <= _play_width(a):
+                run = [run[0], a] if run else [a, a]
+            else:
+                if run and run[1] - run[0] >= 30:
+                    runs.append(run)
+                run = None
+            a += 10.0
+        if run and run[1] - run[0] >= 30:
+            runs.append(run)
+        # capped per side, not per hole: a tree-lined hole is lined on both
+        for r in sorted(runs, key=lambda r: -(r[1] - r[0]))[:2]:
+            stands.append({'side': side, 'a0': round(r[0]), 'a1': round(r[1]),
+                           'count': max(2, min(6, int((r[1] - r[0]) / 45)))})
+
+    # backdrop ring behind a green, only where timber is really behind it
+    if has_green and not stands:
+        gc = centroid(greens[0]['g'])
+        dxb, dyb = _dir(max(0.0, total - 5))
+        if any(pip((gc[0] + dxb*d, gc[1] + dyb*d), wp)
+               for d in (18.0, 30.0, 42.0) for wp in wds):
+            stands = [{'side': 0, 'a0': -1, 'a1': -1, 'count': 4}]
 
     tier = 'A' if (has_green and (bunkers or waters)) else ('B' if has_green else 'C')
     ref = int(hole['r']) if str(hole.get('r', '')).isdigit() else 0
