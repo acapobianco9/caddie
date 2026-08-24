@@ -31,15 +31,18 @@ def main():
     if not rows:
         sys.exit(f'no holes stored for {key}')
     packs = [r['pack'] for r in rows if r.get('pack')]
-    course = _get(f'courses?select=name&key=eq.{q}')
+    course = _get(f'courses?select=name,market_key&key=eq.{q}')
     name = (course[0]['name'] if course else key)
+    # the market decides the local tree vocabulary (see crown.PALM_MARKETS)
+    market = (course[0].get('market_key') or '') if course else ''
 
     os.makedirs(os.path.join(ROOT, 'demo'), exist_ok=True)
     tmp = os.path.join(ROOT, 'demo', f'.{key}.packs.json')
     with open(tmp, 'w') as f:
         json.dump(packs, f)
     out = os.path.join(ROOT, 'demo', f'{key}.html')
-    subprocess.run([sys.executable, os.path.join(HERE, 'crown.py'), tmp, name, out], check=True)
+    subprocess.run([sys.executable, os.path.join(HERE, 'crown.py'),
+                    tmp, name, out, market], check=True)
     os.remove(tmp)
     print(f'rendered {len(packs)} holes -> demo/{key}.html ({name})')
 
