@@ -97,6 +97,78 @@ def pip(pt, poly):
         j = i
     return inside
 
+# ---------------- ground: turning survey into the ground you play on ----------------
+#
+# The corridor is what you play; the ground is what you play it ON. Nothing
+# below invents a biome — a hole with no signal stays parkland, which is both
+# the honest answer and exactly the old behaviour.
+
+def _resample(pts, n=26):
+    """`pts` re-spaced to exactly n points, evenly along its length.
+
+    Both directions matter. crown.py draws one soft wash per shore point, so a
+    200-point coastline would cost 200 gradients and look like a caterpillar —
+    and a 4-point one would leave gaps of open water between the washes.
+    """
+    if len(pts) < 2 or n < 2:
+        return list(pts)
+    seg = [math.hypot(pts[i+1][0] - pts[i][0], pts[i+1][1] - pts[i][1])
+           for i in range(len(pts) - 1)]
+    L = sum(seg)
+    if L <= 0:
+        return list(pts[:n])
+    out, step, cum, i = [pts[0]], L / (n - 1), 0.0, 0
+    for k in range(1, n - 1):
+        want = step * k
+        while i < len(seg) - 1 and cum + seg[i] < want:
+            cum += seg[i]; i += 1
+        t = (want - cum) / (seg[i] or 1.0)
+        out.append((pts[i][0] + t * (pts[i+1][0] - pts[i][0]),
+                    pts[i][1] + t * (pts[i+1][1] - pts[i][1])))
+    out.append(pts[-1])
+    return out
+
+
+def _edge_run(poly, line, maxd):
+    """The longest run of consecutive vertices of a closed polygon lying
+    within maxd of the playing line — the edge of the marsh facing the hole,
+    rather than the whole marsh."""
+    n = len(poly)
+    if n < 3:
+        return []
+    ok = [line_dist(p, line)[0] <= maxd for p in poly]
+    if not any(ok):
+        return []
+    if all(ok):
+        return list(poly)
+    best, run = (0, 0), None
+    for k in range(2 * n):
+        if ok[k % n]:
+            if run is None:
+                run = k
+        else:
+            if run is not None and k - run > best[1] - best[0]:
+                best = (run, k)
+            run = None
+    if run is not None and 2 * n - run > best[1] - best[0]:
+        best = (run, 2 * n)
+    a, b = best[0], min(best[1], best[0] + n)
+    return [poly[i % n] for i in range(a, b)] if b - a >= 2 else []
+
+
+def _buffer(pl, w):
+    """A polyline thickened into a polygon, w yards either side. A dry channel
+    is a strip of ground, not a line, and the ground layer draws areas."""
+    L, R = [], []
+    for i in range(len(pl)):
+        j = min(i + 1, len(pl) - 1); k = max(i - 1, 0)
+        dx = pl[j][0] - pl[k][0]; dy = pl[j][1] - pl[k][1]
+        m = math.hypot(dx, dy) or 1.0
+        L.append((pl[i][0] - dy / m * w, pl[i][1] + dx / m * w))
+        R.append((pl[i][0] + dy / m * w, pl[i][1] - dx / m * w))
+    return L + R[::-1]
+
+
 def water_cross(line, poly, total):
     """Walk the playing line through a water polygon; return (enter, exit) arcs.
     Rivers wander — their bbox lies about carries; the line itself does not."""
@@ -272,6 +344,27 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
             d = dmin
         elif t == 'u':      # building
             if d > 80: continue
+        # ---- ground types (GEN 7). These never become hazards or facts; they
+        # only decide what colour the ground under the hole is. The gates are
+        # wide because ground is context, not a carry.
+        elif t == 'i':      # water OSM says is dry most of the year
+            d = min(line_dist(p, line)[0] for p in g)
+            if d > 110: continue
+        elif t == 'J':      # dry channel centreline
+            d = min(line_dist(p, line)[0] for p in g)
+            if d > 90: continue
+        elif t == 'A':      # beach, dune or waste sand
+            d = min(line_dist(p, line)[0] for p in g)
+            if d > 170: continue
+        elif t == 'C':      # coastline (mean high water)
+            d = min(line_dist(p, line)[0] for p in g)
+            if d > 240: continue
+        elif t == 'M':      # wetland / saltmarsh
+            d = min(line_dist(p, line)[0] for p in g)
+            if d > 190: continue
+        elif t == 'L':      # clifftop
+            d = min(line_dist(p, line)[0] for p in g)
+            if d > 200: continue
         else:
             continue
         keep.append(dict(t=t, g=g, c=c, d=d, arc=arc, near=near, far=far, src=g_ll))
@@ -329,6 +422,55 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
     hedges = [f for f in keep if f['t'] == 'h']
     fences = [f for f in keep if f['t'] == 'n']
     bldgs = [f for f in keep if f['t'] == 'u']
+    # ---- ground (GEN 7) ----
+    drys = [f for f in keep if f['t'] == 'i']
+    chans = [f for f in keep if f['t'] == 'J']
+    sands = [f for f in keep if f['t'] == 'A']
+    coasts = [f for f in keep if f['t'] == 'C']
+    wets = [f for f in keep if f['t'] == 'M']
+    cliffs = [f for f in keep if f['t'] == 'L']
+
+    def _closest(fs):
+        return min((f['d'] for f in fs), default=1e9)
+
+    # one shore polyline: the coastline if there is one, else the clifftop,
+    # else the edge of the marsh that actually faces the hole
+    shore = []
+    if coasts:
+        shore = _resample(min(coasts, key=lambda f: f['d'])['g'])
+    elif cliffs:
+        shore = _resample(min(cliffs, key=lambda f: f['d'])['g'])
+    elif wets:
+        shore = _resample(_edge_run(min(wets, key=lambda f: f['d'])['g'], line, 210))
+
+    ground_biome = 'parkland'
+    if cliffs and _closest(cliffs) < 130 and len(shore) >= 2:
+        ground_biome = 'cliff'
+    elif coasts and _closest(coasts) < 220:
+        # sand lying between the line and the water is a beach; without it the
+        # ground is dune turf, which is what links means
+        ground_biome = 'strand' if (sands and _closest(sands) < 150) else 'links'
+    elif wets and _closest(wets) < 140 and len(shore) >= 2:
+        ground_biome = 'marsh'
+    elif drys and not [f for f in keep if f['t'] == 'w']:
+        # the only "water" near this hole is a wash, and there is no wet water
+        # anywhere in play. Angeles National, and every desert course like it.
+        ground_biome = 'desert'
+
+    def _off_shore(g0):
+        if not shore:
+            return 1e9
+        return min(math.hypot(a[0] - b[0], a[1] - b[1]) for a in g0 for b in shore)
+
+    # waste: ground you can be in that is not a bunker
+    waste = [rnd_pts(_resample(f['g'], 28)) for f in drys[:2]]
+    for f in sands[:3]:
+        if ground_biome in ('strand', 'links') and _off_shore(f['g']) < 120:
+            continue     # that IS the beach — crown draws it from `shore`
+        waste.append(rnd_pts(_resample(f['g'], 28)))
+    for f in chans[:2]:
+        waste.append(rnd_pts(_resample(_buffer(f['g'], 11.0), 30)))
+    waste = waste[:4]
     # a crossing creek plays exactly like crossing water: fold streams into
     # every water-behaviour computation below
     wlike = waters + streams
@@ -529,6 +671,7 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
         'fw_start': fw_start,
         'naip_sand': naip_sand,
         'rock_count': len(rocks),
+        'biome': ground_biome,
         'elev_ft': (ep[-1] if (ep := _elev_prof(elev, line_ll, line, total))
                     else _elev_ft(elev, line_ll)),
     }
@@ -555,6 +698,13 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
         'carries': carries,
         'bend': ({'at': int(round(bend[0])), 'dir': bdir} if bend else None),
         'stands': stands,
+        'biome': ground_biome,
+        'shore': rnd_pts(shore) if (ground_biome != 'parkland' and shore) else [],
+        'mhw': (rnd_pts(_resample(min(coasts, key=lambda f: f['d'])['g']))
+                if (ground_biome == 'marsh' and coasts) else []),
+        'waste': waste,
+        'dunes': [],      # 3DEP ridges — filled by the elevation stage
+        'turf': [],       # NAIP turf mask — filled by the imagery stage
         'facts': facts,
         'read': '', 'sign': '',
         '_srcs': ({id(greens[0]['src'])} if has_green else set())
