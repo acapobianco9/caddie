@@ -313,7 +313,10 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
         near = min(line_dist(p, xl)[1] for p in g)
         far = max(line_dist(p, xl)[1] for p in g)
         if t == 't':
-            if not (d < 40 and arc < 35): continue
+            # forward tees sit well up the hole — 35 yards only ever found the
+            # back pair. The reach is capped at a quarter of the hole so a
+            # short par 3 cannot swallow the next tee complex.
+            if not (d < 40 and arc < min(110.0, total * 0.28)): continue
         elif t == 'g':
             if not (d < 45 and arc > total - 55): continue
         elif t in ('b', 'B'):
@@ -756,6 +759,13 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
         'bldgs': [rnd_pts(f['g']) for f in bldgs[:4]],
         'ep': ep,
         'tees': [[round(t['c'][0], 1), round(t['c'][1], 1)] for t in tees[:4]],
+        # per-tee yardage, measured: each surveyed tee box projected onto the
+        # playing line, so the card can say what the hole is from the tee you
+        # are actually on. `name` stays empty until course_tees is populated —
+        # the number is ours to measure, the name is the club's to tell us.
+        'tee_sets': [{'at': int(round(t['arc'])),
+                      'yds': int(round(max(0.0, gfmb[1] - t['arc']))),
+                      'name': ''} for t in tees[:4]],
         'fw': fw,
         'carries': carries,
         'bend': ({'at': int(round(bend[0])), 'dir': bdir} if bend else None),
