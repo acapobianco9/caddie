@@ -9,6 +9,11 @@ OpenStreetMap is missing:
         blobs. generate.py only uses them on holes that have a green but
         no surveyed sand (OSM always wins) and flags the pack naip_sand,
         so the render and the app can say where the data came from.
+  TURF  the irrigated ground, as a set of ~22 m discs, plus `arid`: how
+        much of everything OUTSIDE the turf is bare and bright. That one
+        number is the difference between a parkland course and a desert
+        one, measured off the imagery rather than inferred from the zip
+        code (GEN 7).
   VOTE  a turf scorer the synthesizer uses to break ties between rival
         green candidates: a real green sits on smooth, healthy turf; a
         neighbour-course impostor in the scrub does not.
@@ -34,6 +39,8 @@ UA = 'YoinkCaddie/1.0 (NAIP stage; contact: anthony@amg-demolition.com)'
 PAD_M = 1250.0     # chip half-width in meters (covers a full course)
 SIZE = 2600        # export pixels (~1 m/px at this pad)
 G = 3              # analysis grid stride in pixels
+GT = 22            # turf-mask cell in pixels (~22 m)
+DEM = 500          # DEM export pixels (~5 m/px at this pad)
 
 
 def _fetch(lat, lng):
@@ -97,11 +104,178 @@ def _hull(pts):
     return lo[:-1] + hi[:-1]
 
 
+def _boxmean(a, k):
+    """Mean of a (2k+1) square window, via an integral image. numpy only —
+    the sweep installs pillow and numpy and nothing else."""
+    import numpy as np
+    p = np.pad(a, k, mode='edge').astype(np.float64)
+    c = np.pad(p.cumsum(0).cumsum(1), ((1, 0), (1, 0)))
+    n = 2 * k + 1
+    H, W = a.shape
+    s = (c[n:n + H, n:n + W] - c[0:H, n:n + W]
+         - c[n:n + H, 0:W] + c[0:H, 0:W])
+    return (s / (n * n)).astype(np.float32)
+
+
+def _ridges(z, mpx, tpi_lo, relief_lo, kind, cap):
+    """Crest lines of raised ground.
+
+    z is a DEM in metres, mpx metres per pixel. A cell is on a ridge when it
+    stands `tpi_lo` metres above the mean of the ground around it — the same
+    thing your eye does when it picks a dune out of a links.
+    """
+    import numpy as np
+    win = max(3, int(round(65.0 / mpx)))
+    tpi = z - _boxmean(z, win)
+    m = tpi > tpi_lo
+    # a whole mountainside is not a dune: back off until the mask is sane
+    lo = tpi_lo
+    for _ in range(6):
+        if m.mean() <= 0.12:
+            break
+        lo *= 1.5
+        m = tpi > lo
+    if m.mean() > 0.12 or not m.any():
+        return []
+    return _crests(m, z, mpx, relief_lo, kind, cap, 900, 90000)
+
+
+def _scarps(z, mpx, slope_lo, relief_lo, cap):
+    """Crest lines of steep ground — the top edge of a bluff.
+
+    A cliff is not a raised blob, so TPI finds the whole plateau behind it and
+    nothing useful. Gradient does find it, and the top of the band is the line
+    you actually stand on.
+    """
+    import numpy as np
+    gy, gx = np.gradient(z.astype(np.float32), mpx)
+    g = np.hypot(gx, gy)
+    m = g > slope_lo
+    lo = slope_lo
+    for _ in range(5):
+        if m.mean() <= 0.10:
+            break
+        lo *= 1.4
+        m = g > lo
+    if m.mean() > 0.10 or not m.any():
+        return []
+    return _crests(m, z, mpx, relief_lo, 'scarp', cap, 1200, 260000)
+
+
+def _crests(m, z, mpx, relief_lo, kind, cap, a_lo, a_hi):
+    """Each connected blob of `m` reduced to a five-point crest along its own
+    long axis, plus a point 30 m down the fall so the renderer can hachure the
+    correct side whatever direction the hole runs."""
+    import numpy as np
+    out = []
+    cell = mpx * mpx
+    for cells in _blobs(m):
+        a2 = len(cells) * cell
+        if not a_lo <= a2 <= a_hi:
+            continue
+        ys = np.array([c[0] for c in cells], dtype=np.float32)
+        xs = np.array([c[1] for c in cells], dtype=np.float32)
+        zz = np.array([z[c[0], c[1]] for c in cells], dtype=np.float32)
+        if float(zz.max() - zz.min()) < relief_lo:
+            continue
+        cy, cx = float(ys.mean()), float(xs.mean())
+        dy, dx = ys - cy, xs - cx
+        # principal axis of the blob = the line the crest runs along
+        cov = np.array([[float((dx * dx).mean()), float((dx * dy).mean())],
+                        [float((dx * dy).mean()), float((dy * dy).mean())]])
+        w, v = np.linalg.eigh(cov)
+        ax = v[:, int(np.argmax(w))]              # (x, y) unit-ish
+        n = math.hypot(float(ax[0]), float(ax[1])) or 1.0
+        ax = (float(ax[0]) / n, float(ax[1]) / n)
+        t = dx * ax[0] + dy * ax[1]
+        if float(t.max() - t.min()) * mpx < 30.0:
+            continue                              # a knob, not a ridge
+        crest = []
+        edges = np.linspace(float(t.min()), float(t.max()), 6)
+        for i in range(5):
+            sel = (t >= edges[i]) & (t <= edges[i + 1])
+            if not sel.any():
+                continue
+            k = int(np.argmax(np.where(sel, zz, -1e9)))
+            crest.append((float(ys[k]), float(xs[k])))
+        if len(crest) < 3:
+            continue
+        # the fall: 30 m off the crest, on whichever side drops away
+        off = 30.0 / mpx
+        px, py = -ax[1], ax[0]
+        H, W = z.shape
+        def zat(fy, fx):
+            iy, ix = int(round(fy)), int(round(fx))
+            return float(z[iy, ix]) if 0 <= iy < H and 0 <= ix < W else 1e9
+        side = 1.0 if zat(cy + py * off, cx + px * off) <= zat(cy - py * off, cx - px * off) else -1.0
+        out.append({'k': kind, 'h': round(float(zz.max() - zz.min()), 1),
+                    'c': crest,
+                    'f': (cy + py * off * side, cx + px * off * side)})
+        if len(out) >= cap:
+            break
+    return out
+
+
+def terrain(lat, lng):
+    """One 3DEP chip -> (sampler, ridges), or (None, []) on any failure.
+
+    The sampler is the per-point elevation lookup facts.elev_ft already uses;
+    the ridges are dune crests and coastal scarps, which OSM almost never maps
+    even on courses that are nothing but dunes.
+    """
+    try:
+        import numpy as np
+        from PIL import Image
+        pady = PAD_M / 110540.0
+        padx = PAD_M / (111320.0 * math.cos(math.radians(lat)))
+        bbox = (lng - padx, lat - pady, lng + padx, lat + pady)
+        url = (f'{ELEV}?bbox={bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}'
+               f'&bboxSR=4326&imageSR=4326&size={DEM},{DEM}&format=tiff&f=image')
+        req = urllib.request.Request(url, headers={'User-Agent': UA})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            raw = r.read()
+        im = Image.open(io.BytesIO(raw))
+        a = np.asarray(im, dtype=np.float32)
+        if a.ndim == 3:
+            a = a[:, :, 0]
+        H, W = a.shape
+
+        def sample(pt):
+            x = int((pt[1] - bbox[0]) / (bbox[2] - bbox[0]) * W)
+            y = int((bbox[3] - pt[0]) / (bbox[3] - bbox[1]) * H)
+            if not (0 <= x < W and 0 <= y < H):
+                return None
+            v = float(a[y, x])
+            return v if -400 < v < 9000 else None
+    except Exception:
+        return None, []
+    try:
+        z = np.where((a > -400) & (a < 9000), a, np.nan)
+        if not np.isfinite(z).all():
+            z = np.nan_to_num(z, nan=float(np.nanmedian(z)) if np.isfinite(z).any() else 0.0)
+        mpx = (bbox[3] - bbox[1]) * 110540.0 / H
+        rid = (_ridges(z, mpx, 1.6, 2.5, 'dune', 26)
+               + _scarps(z, mpx, 0.25, 10.0, 10))
+
+        def ll(fy, fx):
+            return [round(bbox[3] - fy / H * (bbox[3] - bbox[1]), 6),
+                    round(bbox[0] + fx / W * (bbox[2] - bbox[0]), 6)]
+        out = [{'k': r['k'], 'h': r['h'],
+                'c': [ll(y, x) for y, x in r['c']],
+                'f': ll(*r['f'])} for r in rid]
+        return sample, out
+    except Exception:
+        return sample, []
+
+
 def elevation_sampler(lat, lng):
-    """One USGS 3DEP DEM chip per course (public domain, same family as
-    NAIP). Returns fn([lat,lon]) -> elevation in meters, or None on any
-    failure. Feeds facts.elev_ft: uphill/downhill per hole — the number
-    behind every competitor's paywalled 'plays-like' distances."""
+    """Back-compatible wrapper: just the elevation lookup."""
+    return terrain(lat, lng)[0]
+
+
+def _elevation_sampler_unused(lat, lng):
+    """Superseded by terrain(); kept only as the reference implementation of
+    the single-purpose DEM fetch."""
     try:
         import numpy as np
         from PIL import Image
@@ -145,15 +319,35 @@ def analyze(lat, lng):
         # sanity: blank / broken / off-coverage chips have no texture story
         if float(nd.std()) < 0.02:
             return None
-        # ---- sand: bright and not vegetated ----
-        m = (nd[::G, ::G] < 0.20) & (red[::G, ::G] > 110.0)
-        if float(m.mean()) > 0.15:      # deserts of "sand" = wrong imagery
-            return None
         mpx_x = (bbox[2] - bbox[0]) * 111320.0 * math.cos(math.radians(lat)) / W
         mpx_y = (bbox[3] - bbox[1]) * 110540.0 / H
+        # ---- the ground between the holes ----
+        # NAIP is flown leaf-on, so irrigated turf reads as strong, smooth
+        # NDVI and everything else tells you what kind of course this is:
+        # trees and rough on a parkland site, decomposed granite on a desert
+        # one. Measured, not guessed from the market.
+        hh, ww = (H // GT) * GT, (W // GT) * GT
+        ndb = nd[:hh, :ww].reshape(hh // GT, GT, ww // GT, GT).mean(axis=(1, 3))
+        rdb = red[:hh, :ww].reshape(hh // GT, GT, ww // GT, GT).mean(axis=(1, 3))
+        turf_m = ndb > 0.32
+        bare_m = (ndb < 0.16) & (rdb > 95.0)
+        off = int(turf_m.size - turf_m.sum())
+        arid = round(float(bare_m.sum()) / max(1, off), 3)
+        tys, txs = np.nonzero(turf_m)
+        turf = [[round(bbox[3] - (int(y) * GT + GT / 2) / H * (bbox[3] - bbox[1]), 6),
+                 round(bbox[0] + (int(x) * GT + GT / 2) / W * (bbox[2] - bbox[0]), 6)]
+                for y, x in zip(tys.tolist(), txs.tolist())]
+        turf_r = round(GT * mpx_x * 0.62 * 1.0936, 1)      # yards, disc radius
+        # ---- sand: bright and not vegetated ----
+        m = (nd[::G, ::G] < 0.20) & (red[::G, ::G] > 110.0)
+        # On a desert course most of the chip is bright and unvegetated, so
+        # blob-finding sand there is meaningless. That used to abort the whole
+        # stage and hand desert courses NO imagery at all; now it only turns
+        # off sand detection, and the turf mask and green votes still ship.
+        sand_ok = float(m.mean()) <= 0.15
         cell = (mpx_x * G) * (mpx_y * G)
         feats = []
-        for cells in _blobs(m):
+        for cells in (_blobs(m) if sand_ok else []):
             m2 = len(cells) * cell
             if not 25 <= m2 <= 2000:
                 continue
@@ -185,6 +379,8 @@ def analyze(lat, lng):
             if va < 0.004:
                 s += 0.4                 # mown-smooth texture
             return s
-        return {'feats': feats, 'green_scorer': green_scorer}
+        return {'feats': feats, 'green_scorer': green_scorer,
+                'turf': turf, 'turf_r': turf_r, 'arid': arid,
+                'sand_ok': sand_ok}
     except Exception:
         return None
