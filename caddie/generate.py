@@ -356,6 +356,9 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
         # ---- ground types (GEN 7). These never become hazards or facts; they
         # only decide what colour the ground under the hole is. The gates are
         # wide because ground is context, not a carry.
+        elif t == 'P':      # penalty area with no water in it
+            d = min(line_dist(p, line)[0] for p in g)
+            if d > 70: continue
         elif t == 'i':      # water OSM says is dry most of the year
             d = min(line_dist(p, line)[0] for p in g)
             if d > 110: continue
@@ -433,6 +436,7 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
     bldgs = [f for f in keep if f['t'] == 'u']
     # ---- ground (GEN 7) ----
     drys = [f for f in keep if f['t'] == 'i']
+    drypen = [f for f in keep if f['t'] == 'P']
     chans = [f for f in keep if f['t'] == 'J']
     sands = [f for f in keep if f['t'] == 'A']
     coasts = [f for f in keep if f['t'] == 'C']
@@ -453,7 +457,10 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
         shore = _resample(_edge_run(min(wets, key=lambda f: f['d'])['g'], line, 210))
 
     ground_biome = 'parkland'
-    if cliffs and _closest(cliffs) < 130 and len(shore) >= 2:
+    # a clifftop only makes a seaside hole if there is actually a sea. Inland
+    # road cuts and canyon walls are mapped natural=cliff too, and Angeles
+    # National was drawing an ocean in the San Gabriel foothills.
+    if cliffs and coasts and _closest(cliffs) < 130 and len(shore) >= 2:
         ground_biome = 'cliff'
     elif coasts and _closest(coasts) < 220:
         # sand lying between the line and the water is a beach; without it the
@@ -472,7 +479,8 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
         return min(math.hypot(a[0] - b[0], a[1] - b[1]) for a in g0 for b in shore)
 
     # waste: ground you can be in that is not a bunker
-    waste = [rnd_pts(_resample(f['g'], 28)) for f in drys[:2]]
+    waste = ([rnd_pts(_resample(f['g'], 28)) for f in drys[:2]]
+             + [rnd_pts(_resample(f['g'], 28)) for f in drypen[:3]])
     for f in sands[:3]:
         if ground_biome in ('strand', 'links') and _off_shore(f['g']) < 120:
             continue     # that IS the beach — crown draws it from `shore`
@@ -522,8 +530,10 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
             ground_biome = 'cliff'
             if not cliffs:
                 shore = _resample([tuple(q) for q in best_sc['c']])
-    if (ground_biome == 'parkland' and arid is not None and arid >= 0.45
-            and not [f for f in keep if f['t'] == 'w']):
+    # Bare ground between the holes is the desert signal, full stop. Requiring
+    # NO water anywhere meant every desert course with an irrigation pond came
+    # back parkland — which was all of them.
+    if ground_biome == 'parkland' and arid is not None and arid >= 0.45:
         ground_biome = 'desert'
     dunes = (dunes + scarps)[:6] if ground_biome in ('links', 'strand', 'cliff') else []
     # Three grounds ship: parkland, desert, links (Anthony, Aug 25 2026). The
@@ -534,7 +544,9 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
     ground_biome = SHIP.get(ground_biome, 'parkland')
     turf = turf if ground_biome == 'desert' else []
     if ground_biome == 'parkland':
-        shore, dunes, waste = [], [], []
+        shore, dunes = [], []      # waste stays: it changes how the hole plays
+    if ground_biome == 'desert':
+        shore = []
     # a crossing creek plays exactly like crossing water: fold streams into
     # every water-behaviour computation below
     wlike = waters + streams
@@ -735,6 +747,7 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
         'fw_start': fw_start,
         'naip_sand': naip_sand,
         'rock_count': len(rocks),
+        'dry_penalty': len(drypen),
         'biome': ground_biome,
         'arid': arid,
         'elev_ft': (ep[-1] if (ep := _elev_prof(elev, line_ll, line, total))
