@@ -103,6 +103,12 @@ def pip(pt, poly):
 # below invents a biome — a hole with no signal stays parkland, which is both
 # the honest answer and exactly the old behaviour.
 
+SHIP = {'parkland': 'parkland', 'desert': 'desert', 'links': 'links',
+        'strand': 'links',      # a beach in front of the tee is still links
+        'cliff': 'links',       # a bluff hole is a seaside hole
+        'marsh': 'parkland'}    # no marsh vocabulary is signed off yet
+
+
 def _resample(pts, n=26):
     """`pts` re-spaced to exactly n points, evenly along its length.
 
@@ -517,7 +523,15 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
             and not [f for f in keep if f['t'] == 'w']):
         ground_biome = 'desert'
     dunes = (dunes + scarps)[:6] if ground_biome in ('links', 'strand', 'cliff') else []
+    # Three grounds ship: parkland, desert, links (Anthony, Aug 25 2026). The
+    # detection above still finds coastline, saltmarsh, clifftop and bluffs,
+    # because that costs nothing and the drawings are already written — we
+    # just don't claim a look that hasn't been signed off. Turning any of them
+    # back on is this one dict and nothing else.
+    ground_biome = SHIP.get(ground_biome, 'parkland')
     turf = turf if ground_biome == 'desert' else []
+    if ground_biome == 'parkland':
+        shore, dunes, waste = [], [], []
     # a crossing creek plays exactly like crossing water: fold streams into
     # every water-behaviour computation below
     wlike = waters + streams
