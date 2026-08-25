@@ -123,16 +123,35 @@ def sync_course(key, name):
     return f'{len(rows)} tees'
 
 
+def _sb_all(path):
+    """Read every row, not the first thousand.
+
+    PostgREST caps ANY single response at 1000 rows whatever limit asks for.
+    The sweep learned this the hard way on 24 Aug 2026: an unpaged read saw
+    the first 1000 courses of 4,975 and reported itself finished. Here it
+    would have been worse than a short run — the name lookup below feeds the
+    NCRDB search, so an unpaged read would have searched for course KEYS
+    instead of names on four courses out of five and silently found nothing.
+    """
+    out, page = [], 0
+    while True:
+        sep = '&' if '?' in path else '?'
+        batch = json.loads(_sb('GET', f'{path}{sep}limit=1000&offset={page * 1000}'))
+        out += batch
+        if len(batch) < 1000:
+            return out
+        page += 1
+
+
 def main():
     arg = sys.argv[1] if len(sys.argv) > 1 else '--all'
     if arg == '--all':
-        courses = json.loads(_sb('GET', 'course_coverage?select=course_key'
-                                        '&status=in.(full,partial)&order=course_key.asc'))
+        courses = _sb_all('course_coverage?select=course_key'
+                          '&status=in.(full,partial)&order=course_key.asc')
         keys = [c['course_key'] for c in courses]
     else:
         keys = [arg]
-    names = {c['key']: c['name'] for c in json.loads(
-        _sb('GET', 'courses?select=key,name&order=key.asc'))}
+    names = {c['key']: c['name'] for c in _sb_all('courses?select=key,name&order=key.asc')}
     ok = miss = 0
     for k in keys:
         try:
