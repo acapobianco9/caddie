@@ -222,10 +222,19 @@ def ground_svg(p, PX, line, total, sc, hid, VW, VH):
     def near(q):
         return min(math.hypot(q[0] - a, q[1] - b) for a, b in cl)
 
-    def in_turf(q):
-        return any(pip(q, t) for t in turfpx) if turfpx else near(q) < 60
+    # The turf mask is the irrigated ground, measured off NAIP as a set of
+    # discs (see naip.py). Where it exists the desert vocabulary stays off it
+    # entirely; where it doesn't we fall back to a corridor band, which is the
+    # old behaviour and is honest about being a guess.
+    turfpx = [(PX((v[0], v[1])), v[2] * sc) for v in turf if len(v) >= 3]
 
-    turfpx = [[PX(tuple(v)) for v in t] for t in turf]
+    def in_turf(q):
+        if not turfpx:
+            return near(q) < 60
+        for (tx, ty), tr in turfpx:
+            if (q[0] - tx) ** 2 + (q[1] - ty) ** 2 < tr * tr:
+                return True
+        return False
 
     def grad(gid, col, mid=.62, inner=.90):
         return (f'<radialGradient id="{gid}{hid}">'
