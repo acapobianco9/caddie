@@ -161,25 +161,35 @@ def main():
             try:
                 data = osm.fetch_course(c['key'], c['name'], c['market'],
                                         c['lat'], c['lng'], mirror=BASE_MIRROR + attempt)
-                # stage 2.5: one NAIP chip per course — imagery sand for
-                # sand-less holes + turf votes for the synthesizer. Purely
-                # best-effort: None means the course ships OSM-only.
+                # stage 2.5: one NAIP chip and one 3DEP chip per course —
+                # imagery sand for sand-less holes, turf votes for the
+                # synthesizer, and (GEN 7) the ground the hole sits on plus
+                # dune and bluff crests. Purely best-effort: a failure here
+                # means the course ships OSM-only, never that it fails.
                 scorer = None
                 esamp = None
+                gnd = {}
                 if naip is not None:
                     try:
                         n = naip.analyze(c['lat'], c['lng'])
                         if n:
                             data['f'] = data['f'] + n['feats']
                             scorer = n['green_scorer']
+                            # GEN 7: the ground between the holes. `arid` says
+                            # whether this is a desert course; the turf mask
+                            # says where the irrigation actually reaches.
+                            gnd['turf'] = n.get('turf') or []
+                            gnd['turf_r'] = n.get('turf_r')
+                            gnd['arid'] = n.get('arid')
                     except Exception:
                         pass
                     try:
-                        esamp = naip.elevation_sampler(c['lat'], c['lng'])
+                        esamp, ridges = naip.terrain(c['lat'], c['lng'])
+                        gnd['ridges'] = ridges
                     except Exception:
                         pass
                 packs, cov = generate.build_course(data, green_scorer=scorer,
-                                                   elev=esamp)
+                                                   elev=esamp, ground=gnd or None)
                 if args.dry:
                     print(json.dumps(cov))
                 else:
