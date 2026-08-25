@@ -817,11 +817,40 @@ def render_hole(p, course_name, market=''):
             yy = chy + k*7*(1 if up else -1)
             S.append(f'<path class="chev" style="opacity:{op}" '
                      f'transform="translate({chx:.1f},{yy:.1f})" d="{glyph}"/>')
-    # tees, real yardage spacing
+    # Tee markers. Real tees come in pairs and you play between them, so the
+    # card draws a pair straddling the line at each surveyed tee box. The tee
+    # the card's yardage is measured from is solid and carries its number; the
+    # rest are hollow, because they are position, not the hole you are playing.
     cols = ['#0C1710', '#2E6FB0', '#FFFFFF', '#A8552A']
+    tsets = p.get('tee_sets') or []
     for i, tc in enumerate(p['tees'][:4]):
-        cx, cy = PX(tuple(tc)); wd = 21-i*1.6
-        S.append(f'<rect class="teebox" x="{cx-wd/2:.0f}" y="{cy-2:.0f}" width="{wd:.0f}" height="4" fill="{cols[i%4]}"/>')
+        cx, cy = PX(tuple(tc))
+        # face the pair across the line, using the line's own direction here
+        a0 = tsets[i]['at'] if i < len(tsets) else 0
+        q0 = PX(point_at_arc(line, max(0.0, a0 - 9)))
+        q1 = PX(point_at_arc(line, min(total, a0 + 9)))
+        dx, dy = q1[0] - q0[0], q1[1] - q0[1]
+        L0 = math.hypot(dx, dy) or 1.0
+        px, py = -dy / L0, dx / L0          # across the line
+        gap = 8.5
+        lead = (i == 0)
+        fill = cols[i % 4] if lead else '#FFFFFF'
+        op = '1' if lead else '.85'
+        for s in (-1, 1):
+            mx, my = cx + px * gap * s, cy + py * gap * s
+            ang = math.degrees(math.atan2(dy, dx))
+            S.append(f'<rect class="teemk" x="{-2.1:.1f}" y="{-3.2:.1f}" width="4.2" '
+                     f'height="6.4" rx="1.1" fill="{fill}" opacity="{op}" '
+                     f'transform="translate({mx:.1f},{my:.1f}) rotate({ang:.0f})"/>')
+        if lead and tsets:
+            lbl = (tsets[0].get('name') or '').upper()
+            txt = f"{lbl} {tsets[0]['yds']}".strip()
+            lx = cx + px * (gap + 6)
+            anc = 'start' if px >= 0 else 'end'
+            if not (6 < lx < VW - 6):
+                lx = cx - px * (gap + 6); anc = 'end' if px >= 0 else 'start'
+            S.append(f'<text class="teelab" x="{lx:.0f}" y="{cy + py * (gap + 6) + 3:.0f}" '
+                     f'text-anchor="{anc}">{txt}</text>')
     # shot line
     S.append(f'<path class="shot" d="{catmull([PX(point_at_arc(line, total*i/8)) for i in range(9)])}"/>')
     # carries last: terrain never eats a number
@@ -1079,6 +1108,8 @@ body{font-family:'Archivo',sans-serif;background:var(--paper);color:var(--ink);p
 .holeart .tuft-d-seed{fill:#877947}
 .holeart .trunk{stroke:var(--ink);stroke-width:1.1;fill:none;stroke-linecap:round;stroke-opacity:.8;vector-effect:non-scaling-stroke}
 .holeart .teebox{stroke:var(--ink);stroke-width:.7}
+.holeart .teemk{stroke:var(--ink);stroke-width:.8}
+.holeart .teelab{font-family:Archivo,system-ui,sans-serif;font-size:7.5px;font-weight:700;letter-spacing:.1em;fill:var(--muted)}
 .holeart text{user-select:none}
 .sign{padding:2px 16px 13px;text-align:center}
 .sign .l{font-family:'Caveat',cursive;font-weight:700;font-size:18px;color:var(--muted);line-height:1.18;max-width:27ch;margin:0 auto;text-wrap:balance}
