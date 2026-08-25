@@ -42,7 +42,14 @@ BASE_MIRROR = int(os.environ.get('SWEEP_MIRROR', '0'))  # spread parallel lanes 
 # 6: trees read properly — GEN 5 saw only wood polygons, so 44 of 230 courses
 #    got a single tree. Tree rows and clusters of individual tree nodes now
 #    count too. Still detection only; the miss cone still decides.
-GEN = 6
+# 7: the ground. Every hole used to be drawn as parkland whatever it sat on.
+#    Reads intermittent water (a dry wash is ground, not a lake), coastline,
+#    sand, saltmarsh and clifftop from OSM; the irrigated turf mask and how
+#    arid the ground between the holes is from NAIP; dune and bluff crests
+#    from 3DEP. Three grounds ship - parkland, desert, links - and a hole
+#    with no signal stays parkland, so this can only add. Also finds the
+#    forward tees and measures the hole from each one.
+GEN = 7
 
 
 def rest(method, path, payload=None, params=''):
