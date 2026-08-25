@@ -189,6 +189,245 @@ def tuft_svg(x, y, s, cls, kind='fan'):
             f'<path class="{cls}" d="{TUFTS[kind]}"/>{seeds}</g>')
 
 
+# ---------------- ground: the six biome vocabularies ----------------
+#
+# GEN 7. Every hole used to be drawn as parkland — three nested green bands,
+# whatever the ground actually was. On a desert course that is not a colour
+# error, it is a false statement about consequence: a wide miss shown landing
+# in progressively lighter green when it really lands in decomposed granite.
+#
+# All of this draws UNDER every other mark and never touches the playing
+# surface. Extents come from the pack, which gets them from NAIP, 3DEP and
+# OSM — nothing here invents where anything is. A hole whose signals are
+# missing stays parkland, which is the honest default.
+
+BIOMES = ('parkland', 'desert', 'links', 'strand', 'cliff', 'marsh')
+
+
+def ground_svg(p, PX, line, total, sc, hid, VW, VH):
+    """Everything under the corridor. Returns (svg_parts, css_parts)."""
+    biome = p.get('biome') or 'parkland'
+    waste = p.get('waste') or []
+    shore = p.get('shore') or []
+    mhw = p.get('mhw') or []
+    dunes = p.get('dunes') or []
+    turf = p.get('turf') or []
+    if biome == 'parkland' and not waste:
+        return [], []
+
+    rg = random.Random(hid * 8191 + 31)
+    N = 60
+    cl = [PX(point_at_arc(line, total * i / (N - 1))) for i in range(N)]
+
+    def near(q):
+        return min(math.hypot(q[0] - a, q[1] - b) for a, b in cl)
+
+    def in_turf(q):
+        return any(pip(q, t) for t in turfpx) if turfpx else near(q) < 60
+
+    turfpx = [[PX(tuple(v)) for v in t] for t in turf]
+
+    def grad(gid, col, mid=.62, inner=.90):
+        return (f'<radialGradient id="{gid}{hid}">'
+                f'<stop offset="0%" stop-color="{col}" stop-opacity="{inner}"/>'
+                f'<stop offset="52%" stop-color="{col}" stop-opacity="{mid}"/>'
+                f'<stop offset="100%" stop-color="{col}" stop-opacity="0"/>'
+                f'</radialGradient>')
+
+    def fade(gid, cx, cy, rx, ry, rot=0):
+        return (f'<ellipse fill="url(#{gid}{hid})" cx="0" cy="0" rx="{rx:.1f}" '
+                f'ry="{ry:.1f}" transform="translate({cx:.1f},{cy:.1f}) '
+                f'rotate({rot:.0f})"/>')
+
+    S, css = [], []
+    S.append('<defs>'
+             + f'<filter id="spf{hid}" x="-45%" y="-45%" width="190%" height="190%">'
+               f'<feTurbulence type="fractalNoise" baseFrequency="0.055" numOctaves="4" '
+               f'seed="{hid * 23 % 90}" result="n"/>'
+               f'<feDisplacementMap in="SourceGraphic" in2="n" scale="11" '
+               f'xChannelSelector="R" yChannelSelector="G" result="d"/>'
+               f'<feGaussianBlur in="d" stdDeviation="1.6"/></filter>'
+             + grad('gsand', '#DDCBA0', .74, .95) + grad('gdune', '#E0D3B0')
+             + grad('gsea', '#B0C8D0', .72, .86) + grad('gbeach', '#EBDCBE')
+             + grad('gdes', '#D9C79E', .45, .62) + grad('gmud', '#D8CFB4', .55, .72)
+             + grad('gmarsh', '#C9CBA0', .5, .68)
+             + '</defs>')
+
+    # ---------- desert ----------
+    if biome == 'desert':
+        S.append(f'<rect x="0" y="0" width="{VW}" height="{VH}" fill="#F2EADA"/>')
+        for _ in range(9):
+            x, y = rg.uniform(0, VW), rg.uniform(0, VH)
+            if in_turf((x, y)):
+                continue
+            S.append(fade('gdes', x, y, rg.uniform(70, 120), rg.uniform(50, 95),
+                          rg.uniform(0, 180)))
+        for _ in range(1300):                       # decomposed granite
+            x, y = rg.uniform(0, VW), rg.uniform(0, VH)
+            if in_turf((x, y)):
+                continue
+            S.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{rg.uniform(.3,.8):.2f}" '
+                     f'fill="#B29A70" opacity="{rg.uniform(.10,.22):.2f}"/>')
+        for _ in range(180):                        # creosote and bursage
+            x, y = rg.uniform(0, VW), rg.uniform(0, VH)
+            d0 = near((x, y))
+            if in_turf((x, y)) or rg.random() > max(.10, 1 - (d0 - 64) / 190):
+                continue
+            r0 = rg.uniform(3.0, 6.4)
+            S.append(fade('gdune', x, y, r0, r0 * 0.72, rg.uniform(0, 180)))
+            S.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{r0*0.5:.1f}" '
+                     f'fill="#AEB68C" opacity="{rg.uniform(.24,.40):.2f}"/>')
+        for _ in range(9):                          # saguaro, well clear of play
+            x, y = rg.uniform(12, VW - 12), rg.uniform(16, VH - 16)
+            if near((x, y)) < 100:
+                continue
+            h0 = rg.uniform(10, 15)
+            S.append(f'<g stroke="#6E7A55" stroke-width="2.2" fill="none" '
+                     f'stroke-linecap="round" opacity=".45">'
+                     f'<path d="M{x:.1f},{y:.1f} v{-h0:.1f}"/>'
+                     f'<path d="M{x:.1f},{y-h0*0.55:.1f} h-3.2 v{-h0*0.28:.1f}"/>'
+                     f'<path d="M{x:.1f},{y-h0*0.74:.1f} h2.8 v{-h0*0.2:.1f}"/></g>')
+        css += ['.holeart{background:#F2EADA}',
+                '.holeart .tree,.holeart .tree-o{stroke:transparent;opacity:0}',
+                '.holeart .rgh{stroke:#E4DAC1}', '.holeart .rgh-o{opacity:.22}',
+                '.holeart .fat-o{opacity:.62;stroke-width:1.3px}']
+
+    # ---------- the sea, and what lies between it and the turf ----------
+    if biome in ('links', 'strand', 'cliff', 'marsh') and shore:
+        sh = [PX(tuple(v)) for v in shore]
+
+        def along(off):
+            """The shoreline pushed `off` px seaward (negative) or inland."""
+            out = []
+            for i in range(len(sh)):
+                j = min(i + 1, len(sh) - 1); k = max(i - 1, 0)
+                dx = sh[j][0] - sh[k][0]; dy = sh[j][1] - sh[k][1]
+                L = math.hypot(dx, dy) or 1.0
+                out.append((sh[i][0] - dy / L * off, sh[i][1] + dx / L * off))
+            return out
+
+        for i, (cx, cy) in enumerate(along(-70)):
+            S.append(fade('gsea', cx, cy, 118, 74))
+
+        if biome == 'cliff':
+            d0 = catmull(sh)
+            S.append(f'<path class="cliff-e" d="{d0}"/>')
+            for i in range(0, len(sh) - 1):
+                j = min(i + 1, len(sh) - 1)
+                dx = sh[j][0] - sh[i][0]; dy = sh[j][1] - sh[i][1]
+                L = math.hypot(dx, dy) or 1.0
+                for t in (0.25, 0.6):
+                    x0 = sh[i][0] + dx * t; y0 = sh[i][1] + dy * t
+                    ln = rg.uniform(9, 16)
+                    S.append(f'<path d="M{x0:.1f},{y0:.1f} '
+                             f'l{-dy/L*ln:.1f},{dx/L*ln:.1f}" stroke="var(--ink)" '
+                             f'stroke-width="{rg.uniform(.8,1.3):.2f}" stroke-linecap="round" '
+                             f'opacity="{rg.uniform(.22,.40):.2f}"/>')
+        elif biome == 'marsh':
+            for cx, cy in along(26):
+                S.append(fade('gmud', cx, cy, 68, 48))
+            for cx, cy in along(84):
+                S.append(fade('gmarsh', cx, cy, 60, 44))
+            if mhw:
+                S.append(f'<path class="mhw" d="{catmull([PX(tuple(v)) for v in mhw])}"/>')
+            def to_shore(q):
+                return min(math.hypot(q[0]-a, q[1]-b) for a, b in sh)
+
+            for _ in range(900):                    # spartina, near the water only
+                x, y = rg.uniform(0, VW), rg.uniform(0, VH)
+                ds = to_shore((x, y))
+                if near((x, y)) < 56 or ds > 165 or rg.random() > (1 - ds / 200):
+                    continue
+                S.append(f'<path d="M{x:.1f},{y:.1f} l{rg.uniform(-1.5,1.5):.1f},'
+                         f'-{rg.uniform(4.5,9.0):.1f}" stroke="#7E8C53" stroke-width="1" '
+                         f'stroke-linecap="round" opacity="{rg.uniform(.42,.72):.2f}"/>')
+        else:                                       # links and strand get a beach
+            for cx, cy in along(34):
+                S.append(fade('gbeach', cx, cy, 46, 40))
+
+        # surf: a crisp break line, watercolour spume either side of it. Not on
+        # marsh — protected water does not break.
+        if biome != 'marsh':
+            def spume(off, half, op, n, stretch):
+                out = []
+                base = along(off)
+                for k in range(n):
+                    i0 = int(len(base) * (k + rg.uniform(.05, .3)) / n)
+                    i1 = min(len(base) - 1, i0 + max(2, int(len(base) / n * stretch)))
+                    if i1 - i0 < 2:
+                        continue
+                    A, B = [], []
+                    for j in range(i0, i1 + 1):
+                        t = (j - i0) / max(1, i1 - i0)
+                        hw = half * (math.sin(math.pi * t) ** 0.42) * rg.uniform(.85, 1.15)
+                        px0, py0 = base[j]
+                        A.append((px0 - hw, py0)); B.append((px0 + hw, py0))
+                    out.append(f'<path d="{catmull(A + B[::-1], True)}" fill="#FFFFFF" '
+                               f'opacity="{op * rg.uniform(.75, 1.15):.2f}" '
+                               f'filter="url(#spf{hid})"/>')
+                return out
+            S += spume(-14, 4.6, .34, 4, 2.6)
+            S.append(f'<path class="surf" d="{catmull(sh)}"/>')
+            S += spume(6, 3.4, .52, 5, 2.1)
+
+        # dune ridges: soft mounds, hachures down the fall, marram on the crown
+        for dn in dunes:
+            crest = [PX(tuple(v)) for v in (dn.get('c') or [])]
+            if len(crest) < 2:
+                continue
+            side = dn.get('s', 1)
+            for i in range(0, len(crest), max(1, len(crest) // 4)):
+                cx, cy = crest[i]
+                rx = rg.uniform(34, 48); ry = rx * 0.58
+                S.append(fade('gdune', cx, cy, rx, ry))
+                for j in range(12):
+                    t = j / 11.0
+                    a = -math.pi * 0.12 + t * (math.pi * 1.24)
+                    x0 = cx + rx * 0.68 * math.cos(a)
+                    y0 = cy + ry * 0.66 * math.sin(a)
+                    S.append(f'<path d="M{x0:.1f},{y0:.1f} '
+                             f'l{rg.uniform(1.5,3.5)*side:.1f},{rg.uniform(5,9):.1f}" '
+                             f'stroke="var(--ink)" stroke-width=".95" stroke-linecap="round" '
+                             f'opacity="{0.44*(1-abs(t-0.5)):.2f}"/>')
+                for j in range(5):
+                    S.append(tuft_svg(cx + rg.uniform(-rx*.6, rx*.6),
+                                      cy + rg.uniform(-ry*.5, ry*.55),
+                                      1.0 + rg.random()*0.4, 'tuft-d',
+                                      rg.choice(['fan', 'arc'])))
+        css += ['.holeart .tree,.holeart .tree-o{stroke:transparent;opacity:0}',
+                '.holeart .rgh{stroke:#E6DEC8}', '.holeart .rgh-o{opacity:.22}',
+                '.holeart .fat-o{opacity:.58;stroke-width:1.2px}']
+
+    # ---------- sandy waste: any biome, measured extents ----------
+    for wpoly in waste:
+        P = [PX(tuple(v)) for v in wpoly]
+        if len(P) < 3:
+            continue
+        cx = sum(q[0] for q in P) / len(P); cy = sum(q[1] for q in P) / len(P)
+        rx = (max(q[0] for q in P) - min(q[0] for q in P)) / 2
+        ry = (max(q[1] for q in P) - min(q[1] for q in P)) / 2
+        # waste has NO lip — that is what makes it waste — so it fades out
+        # instead of taking the bunker's ink rim
+        steps = max(2, int(max(rx, ry) / 26))
+        for i in range(steps):
+            t = (i + 0.5) / steps
+            px0 = min(q[0] for q in P) + 2 * rx * t
+            py0 = cy + math.sin(t * math.pi * 1.3) * ry * 0.35
+            S.append(fade('gsand', px0, py0, rg.uniform(30, 46), rg.uniform(20, 30)))
+            for _ in range(90):
+                rr = rg.random() ** 0.6
+                aa = rg.uniform(0, 2 * math.pi)
+                S.append(f'<circle cx="{px0+math.cos(aa)*rr*40:.1f}" '
+                         f'cy="{py0+math.sin(aa)*rr*28:.1f}" '
+                         f'r="{rg.uniform(.35,.9):.2f}" fill="#B9A783" '
+                         f'opacity="{(1-rr)*rg.uniform(.38,.68):.2f}"/>')
+            for _ in range(3):
+                S.append(tuft_svg(px0 + rg.uniform(-30, 30), py0 + rg.uniform(-22, 22),
+                                  1.1 + rg.random()*0.4, 'tuft-d',
+                                  rg.choice(['fan', 'arc', 'sedge'])))
+    return S, css
+
+
 def render_hole(p, course_name, market=''):
     line = [tuple(q) for q in p['line']]
     total = arclen(line)
@@ -207,6 +446,10 @@ def render_hole(p, course_name, market=''):
     tee_px = PX(line[0])
     ev0 = (p.get('facts') or {}).get('elev_ft') or 0
     S = []
+    gsvg, gcss = ground_svg(p, PX, line, total, sc, hid, VW, VH)
+    S += gsvg
+    if gcss:
+        S.append('<style>' + ''.join(gcss) + '</style>')
     # corner wash: three broad, soft green pools in the dead corners of the
     # card. Ground tone, nothing more — it claims no feature, sits under every
     # other mark, and never comes near the playing line. The card had large
@@ -773,6 +1016,9 @@ body{font-family:'Archivo',sans-serif;background:var(--paper);color:var(--ink);p
 .holeart .face{fill:var(--sand-d);stroke:none}
 .holeart .bunk-o{fill:none;stroke:var(--ink);stroke-width:1.1}
 .holeart .wat{fill:var(--water-d);stroke:none}
+.holeart .surf{fill:none;stroke:#FFFFFF;stroke-width:3.2;opacity:.90;stroke-linecap:round}
+.holeart .cliff-e{fill:none;stroke:var(--ink);stroke-width:1.6;opacity:.62}
+.holeart .mhw{fill:none;stroke:#5F7C88;stroke-width:1.2;opacity:.55;stroke-dasharray:7 6}
 .holeart .wat-big{fill:var(--water-d);fill-opacity:.30;stroke:none}
 .holeart .wat-o{fill:none;stroke:var(--ink);stroke-width:1.4;stroke-linejoin:round}
 .holeart .shallow{fill:var(--water);stroke:none}
