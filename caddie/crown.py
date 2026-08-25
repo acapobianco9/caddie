@@ -520,13 +520,17 @@ def render_hole(p, course_name, market=''):
                 for cls, wd in (('fat-o', fw+1), ('fat', fw)):
                     S.append(f'<path class="{cls}" style="stroke-width:{wd:.0f}px;'
                              f'stroke-linecap:round" d="{d_f}"/>')
-        else:
+        elif (p.get('biome') or 'parkland') != 'desert':
             # a provisional (synthetic) hole draws its assumed path dashed —
             # the drawing itself says "the line is a guess"
             dash = ';stroke-dasharray:16 11' if p.get('synthetic') else ''
             d_f = band(6, max(24, total-24))
             for cls, wd in (('fat-o', fw+1), ('fat', fw)):
                 S.append(f'<path class="{cls}" style="stroke-width:{wd:.0f}px{dash}" d="{d_f}"/>')
+        # else: desert, and nobody surveyed the fairway. Running a green band
+        # from the tee to the green would invent a couple of hundred yards of
+        # grass across ground we can see is desert. The line is drawn; the
+        # ground is left as the ground.
         # dispersion cone: the honest version of "aim here"
         tgt = min(258, total-55)
         if tgt > 90 and not p.get('synthetic'):
