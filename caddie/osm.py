@@ -37,6 +37,44 @@ def _dp(pts, eps):
     return [pts[0], pts[-1]]
 
 
+def _dry(tags):
+    """True when OSM itself says this water is not there most of the year.
+
+    A dry wash drawn as a lake is not a style bug, it is a false statement
+    about where the ball ends up. Angeles National plays across the Tujunga
+    Wash; we drew the wash as a 722-yard lake for months because we read the
+    polygon and ignored the tag sitting on it (Aug 2026).
+    """
+    return (tags.get('intermittent') in ('yes', 'seasonal')
+            or tags.get('seasonal') in ('yes', 'dry', 'spring', 'summer')
+            or tags.get('water') in ('intermittent', 'wadi')
+            or tags.get('waterway') == 'wadi'
+            or tags.get('basin') in ('detention', 'infiltration'))
+
+
+def _clip(pts, la0, lo0, la1, lo1):
+    """The longest run of a way that lies inside the box, plus one point
+    either side so the line leaves the frame instead of stopping short.
+
+    Overpass returns a way's WHOLE geometry when any part of it touches the
+    bbox, and a coastline or clifftop can run for miles. Without this a
+    seaside hole carries the entire county's shoreline in its pack.
+    """
+    inb = [la0 <= p[0] <= la1 and lo0 <= p[1] <= lo1 for p in pts]
+    best, run = (0, 0), None
+    for i, ok in enumerate(inb):
+        if ok and run is None:
+            run = i
+        elif not ok and run is not None:
+            if i - run > best[1] - best[0]:
+                best = (run, i)
+            run = None
+    if run is not None and len(inb) - run > best[1] - best[0]:
+        best = (run, len(inb))
+    a = max(0, best[0] - 1); b = min(len(pts), best[1] + 1)
+    return pts[a:b] if b - a >= 2 else []
+
+
 def overpass(query, mirror=0, timeout=90):
     body = 'data=' + urllib.parse.quote(query)
     req = urllib.request.Request(MIRRORS[mirror % len(MIRRORS)],
@@ -107,31 +145,66 @@ def fetch_course(key, name, market, lat, lng, pad=0.020, mirror=0):
     # tree rows come back with the woodland. A golf course is far more often
     # mapped as rows and individual trees than as a wood polygon — reading
     # only polygons is what starved the honest tree rule (GEN 6, Aug 24 2026).
+    # GEN 7 widens this to the ground the hole actually sits on: the coastline,
+    # the beach and dune sand, the saltmarsh, the clifftop — and, separately,
+    # the water OSM tells us is dry most of the year.
     qc = (f'[out:json][timeout:60];('
           f'way["natural"="water"]({bc});way["waterway"="riverbank"]({bc});'
           f'way["natural"="wood"]({bc});way["landuse"="forest"]({bc});'
-          f'way["natural"="tree_row"]({bc}););out geom;')
+          f'way["natural"="tree_row"]({bc});'
+          f'way["natural"="coastline"]({bc});'
+          f'way["natural"~"^(beach|sand|dune|shingle)$"]({bc});'
+          f'way["natural"="wetland"]({bc});'
+          f'way["natural"="cliff"]({bc});'
+          f');out tags geom;')
     try:
         jc = _try_overpass(qc, tries=2, base_mirror=mirror)
-        nw = nx = nr = 0
+        #   w water   x wood   X tree row   i water that is dry most of the year
+        #   C coastline (mean high water)   A sand: beach, dune, waste
+        #   M wetland / saltmarsh           L clifftop
+        caps = {'w': 120, 'x': 80, 'X': 60, 'i': 30,
+                'C': 10, 'A': 40, 'M': 30, 'L': 20}
+        cnt = {k: 0 for k in caps}
+        la0, lo0 = lat - pc * 1.25, lng - pc * 1.25
+        la1, lo1 = lat + pc * 1.25, lng + pc * 1.25
         for e in jc.get('elements', []):
             if not e.get('geometry'):
                 continue
             tags = e.get('tags', {}) or {}
-            if tags.get('natural') == 'tree_row':
-                t, eps, minpts, cap, have = 'X', 0.00008, 2, 60, nr
-            elif tags.get('natural') == 'wood' or tags.get('landuse') == 'forest':
-                t, eps, minpts, cap, have = 'x', 0.00012, 4, 80, nx
-            else:
-                t, eps, minpts, cap, have = 'w', 0.00004, 4, 120, nw
-            if len(e['geometry']) < minpts or have >= cap:
+            # A course pond is nearly always tagged BOTH golf=water_hazard and
+            # natural=water, and a course bunker BOTH golf=bunker and
+            # natural=sand. Those already came back correctly typed from the
+            # golf query; taking them again here is what double-drew the water
+            # and would have painted 55 phantom waste areas over Angeles
+            # National's bunkers.
+            if tags.get('golf') in TYPE_CODE or tags.get('golf') in ('hole', 'fairway'):
                 continue
-            g = _dp([[round(p['lat'], 5), round(p['lon'], 5)] for p in e['geometry']], eps)
+            nat = tags.get('natural')
+            if nat == 'tree_row':
+                t, eps, minpts = 'X', 0.00008, 2
+            elif nat == 'wood' or tags.get('landuse') == 'forest':
+                t, eps, minpts = 'x', 0.00012, 4
+            elif nat == 'coastline':
+                t, eps, minpts = 'C', 0.00006, 2
+            elif nat == 'cliff':
+                t, eps, minpts = 'L', 0.00006, 2
+            elif nat == 'wetland':
+                t, eps, minpts = 'M', 0.0001, 4
+            elif nat in ('beach', 'sand', 'dune', 'shingle'):
+                t, eps, minpts = 'A', 0.00008, 4
+            elif _dry(tags):
+                t, eps, minpts = 'i', 0.00006, 4
+            else:
+                t, eps, minpts = 'w', 0.00004, 4
+            if len(e['geometry']) < minpts or cnt[t] >= caps[t]:
+                continue
+            raw = [[round(p['lat'], 5), round(p['lon'], 5)] for p in e['geometry']]
+            if t in ('C', 'L'):
+                raw = _clip(raw, la0, lo0, la1, lo1)
+            g = _dp(raw, eps) if len(raw) >= minpts else []
             if len(g) >= minpts:
                 feats.append([t, g])
-                if t == 'x': nx += 1
-                elif t == 'X': nr += 1
-                else: nw += 1
+                cnt[t] += 1
     except Exception:
         pass  # golf-only pack is still a good pack
     # hazards & landmarks: streams, rock, hedges/walls, cart paths, buildings,
@@ -150,7 +223,7 @@ def fetch_course(key, name, market, lat, lng, pad=0.020, mirror=0):
         jh = _try_overpass(qh, tries=2, base_mirror=mirror)
         # tree NODES are one coordinate each and are the main way a course's
         # timber gets mapped, so they get a generous cap (GEN 6).
-        caps = {'S': 40, 'r': 40, 'h': 40, 'n': 60, 'p': 80, 'u': 60, 'T': 400}
+        caps = {'S': 40, 'J': 30, 'r': 40, 'h': 40, 'n': 60, 'p': 80, 'u': 60, 'T': 400}
         cnt = {k: 0 for k in caps}
         for e in jh.get('elements', []):
             tags = e.get('tags', {}) or {}
@@ -162,7 +235,8 @@ def fetch_course(key, name, market, lat, lng, pad=0.020, mirror=0):
             if not e.get('geometry') or len(e['geometry']) < 2:
                 continue
             if tags.get('waterway') in ('stream', 'ditch'):
-                t, eps = 'S', 0.00006
+                # a wash that runs twice a year is not a stream; it is ground
+                t, eps = ('J' if _dry(tags) else 'S'), 0.00006
             elif tags.get('natural') in ('bare_rock', 'scree', 'stone'):
                 t, eps = 'r', 0.00006
             elif tags.get('barrier') == 'hedge':
