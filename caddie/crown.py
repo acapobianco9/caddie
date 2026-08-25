@@ -320,7 +320,13 @@ def render_hole(p, course_name, market=''):
     def _sig(pts):
         return tuple(sorted((round(a, 1), round(b, 1)) for a, b in pts))
 
-    seen_w, wpx = set(), []
+    # Water bigger than the hole is terrain, not a hazard — and in the desert it
+    # is usually not even wet. Angeles National sits in the Tujunga Wash, whose
+    # OSM polygons run 722 x 330 yards and carry intermittent=yes; filled in as
+    # ponds they painted over the entire hole. A body that large draws as its
+    # SHORELINE only: the edge is the useful fact, and the corridor stays
+    # readable underneath. GEN 7 will read `intermittent` and draw a dry wash.
+    seen_w, wpx, oversize = set(), [], []
     for wply in p['waters']:
         P = [PX(tuple(q)) for q in wply]
         k = _sig(P)
@@ -328,10 +334,18 @@ def render_hole(p, course_name, market=''):
             continue
         seen_w.add(k)
         wpx.append(P)
-    for P in wpx:
+        ext = max(max(q[0] for q in wply) - min(q[0] for q in wply),
+                  max(q[1] for q in wply) - min(q[1] for q in wply))
+        oversize.append(ext > total * 1.15)
+
+    for P, big in zip(wpx, oversize):
         dw = catmull(P, True)
-        S.append(f'<path class="wat" d="{dw}"/>')
-        S.append(f'<path class="shallow" d="{catmull(scale_pts(P, 0.82), True)}"/>')
+        if big:
+            S.append(f'<path class="wat-big" d="{dw}"/>')
+        else:
+            S.append(f'<path class="wat" d="{dw}"/>')
+            S.append(f'<path class="shallow" d="{catmull(scale_pts(P, 0.82), True)}"/>')
+
         # the edge goes on LAST and unbroken. Pale blue on pale turf is a
         # gradient, not a boundary — a player has to know exactly where the
         # ball gets wet (owner, Aug 24 2026). Same treatment the bunkers get.
@@ -759,6 +773,7 @@ body{font-family:'Archivo',sans-serif;background:var(--paper);color:var(--ink);p
 .holeart .face{fill:var(--sand-d);stroke:none}
 .holeart .bunk-o{fill:none;stroke:var(--ink);stroke-width:1.1}
 .holeart .wat{fill:var(--water-d);stroke:none}
+.holeart .wat-big{fill:var(--water-d);fill-opacity:.30;stroke:none}
 .holeart .wat-o{fill:none;stroke:var(--ink);stroke-width:1.4;stroke-linejoin:round}
 .holeart .shallow{fill:var(--water);stroke:none}
 .holeart .shot{stroke:var(--forest);stroke-width:1.2;stroke-dasharray:2 4;fill:none;opacity:.7}
