@@ -239,6 +239,10 @@ def ground_svg(p, PX, line, total, sc, hid, VW, VH):
                 f'ry="{ry:.1f}" transform="translate({cx:.1f},{cy:.1f}) '
                 f'rotate({rot:.0f})"/>')
 
+    # Per-hole CSS must be scoped to THIS card. A <style> inside an inline
+    # SVG is still document-global, so an unscoped `.holeart{...}` from the
+    # desert hole repainted every parkland hole on the same page.
+    sel = f'#ha{hid}'
     S, css = [], []
     S.append('<defs>'
              + f'<filter id="spf{hid}" x="-45%" y="-45%" width="190%" height="190%">'
@@ -287,10 +291,10 @@ def ground_svg(p, PX, line, total, sc, hid, VW, VH):
                      f'<path d="M{x:.1f},{y:.1f} v{-h0:.1f}"/>'
                      f'<path d="M{x:.1f},{y-h0*0.55:.1f} h-3.2 v{-h0*0.28:.1f}"/>'
                      f'<path d="M{x:.1f},{y-h0*0.74:.1f} h2.8 v{-h0*0.2:.1f}"/></g>')
-        css += ['.holeart{background:#F2EADA}',
-                '.holeart .tree,.holeart .tree-o{stroke:transparent;opacity:0}',
-                '.holeart .rgh{stroke:#E4DAC1}', '.holeart .rgh-o{opacity:.22}',
-                '.holeart .fat-o{opacity:.62;stroke-width:1.3px}']
+        css += [f'{sel}{{background:#F2EADA}}',
+                f'{sel} .tree,{sel} .tree-o{{stroke:transparent;opacity:0}}',
+                f'{sel} .rgh{{stroke:#E4DAC1}}', f'{sel} .rgh-o{{opacity:.22}}',
+                f'{sel} .fat-o{{opacity:.62;stroke-width:1.3px}}']
 
     # ---------- the sea, and what lies between it and the turf ----------
     if biome in ('links', 'strand', 'cliff', 'marsh') and shore:
@@ -394,9 +398,9 @@ def ground_svg(p, PX, line, total, sc, hid, VW, VH):
                                       cy + rg.uniform(-ry*.5, ry*.55),
                                       1.0 + rg.random()*0.4, 'tuft-d',
                                       rg.choice(['fan', 'arc'])))
-        css += ['.holeart .tree,.holeart .tree-o{stroke:transparent;opacity:0}',
-                '.holeart .rgh{stroke:#E6DEC8}', '.holeart .rgh-o{opacity:.22}',
-                '.holeart .fat-o{opacity:.58;stroke-width:1.2px}']
+        css += [f'{sel} .tree,{sel} .tree-o{{stroke:transparent;opacity:0}}',
+                f'{sel} .rgh{{stroke:#E6DEC8}}', f'{sel} .rgh-o{{opacity:.22}}',
+                f'{sel} .fat-o{{opacity:.58;stroke-width:1.2px}}']
 
     # ---------- sandy waste: any biome, measured extents ----------
     for wpoly in waste:
@@ -895,7 +899,7 @@ def render_hole(p, course_name, market=''):
 <div><div class="k">Back</div><div class="v">{yd['back']}</div></div>
 <div><div class="k">Depth</div><div class="v">{depth}</div></div>
 {plays}</div></div>
-<svg class="holeart" viewBox="0 0 {VW} {VH}" aria-label="Hole {hid}, par {par}, {yd['mid']} yards">{''.join(S)}</svg>
+<svg class="holeart" id="ha{hid}" viewBox="0 0 {VW} {VH}" aria-label="Hole {hid}, par {par}, {yd['mid']} yards">{''.join(S)}</svg>
 {prof}<div class="strat"><div class="lbl">The read</div><p>{p['read']}</p>
 <table class="carrytab">{trows}</table></div>
 <div class="sign"><div class="l">{p['sign']}</div></div>
