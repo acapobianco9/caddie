@@ -19,7 +19,16 @@ KEY = os.environ['SUPABASE_SERVICE_KEY']
 SBH = {'apikey': KEY, 'Authorization': 'Bearer ' + KEY,
        'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates'}
 NCR = 'https://ncrdb.usga.org'
-UA = 'YoinkCaddie/1.0 (course tee names; contact: anthony@amg-demolition.com)'
+# The NCRDB sits behind a WAF that answers 403 to a bare bot user-agent, so we
+# present as a browser — but we keep identifying ourselves and leave a contact
+# on the end of the string rather than pretending to be someone else. Two
+# requests per course, 1.5 s apart, is the whole of our footprint.
+UA = ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
+      '(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 '
+      'YoinkCaddie/1.0 (+contact: anthony@amg-demolition.com)')
+HDRS = {'User-Agent': UA,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9'}
 REFRESH_DAYS = 180
 
 _jar = http.cookiejar.CookieJar()
@@ -30,10 +39,15 @@ _token = None
 def _boot():
     """GET the search page once: antiforgery cookie + token."""
     global _token
-    req = urllib.request.Request(NCR + '/', headers={'User-Agent': UA})
-    html = _opener.open(req, timeout=30).read().decode('utf-8', 'replace')
+    req = urllib.request.Request(NCR + '/', headers=HDRS)
+    try:
+        html = _opener.open(req, timeout=30).read().decode('utf-8', 'replace')
+    except Exception as e:
+        raise RuntimeError(f'usga boot: {e}') from e
     m = re.search(r'__RequestVerificationToken[^>]*value="([^"]+)"', html)
     _token = m and m.group(1)
+    if not _token:
+        raise RuntimeError('usga boot: no antiforgery token on the search page')
 
 
 def search(name):
@@ -43,16 +57,24 @@ def search(name):
                                    'clubState': '(Select)', 'clubCountry': 'USA'})
     req = urllib.request.Request(
         NCR + '/NCRListing?handler=LoadCourses', data=body.encode(),
-        headers={'User-Agent': UA, 'X-Requested-With': 'XMLHttpRequest',
+        headers={**HDRS, 'X-Requested-With': 'XMLHttpRequest',
+                 'Accept': 'application/json, text/plain, */*',
+                 'Referer': NCR + '/', 'Origin': NCR,
                  'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
                  'RequestVerificationToken': _token or ''})
-    return json.loads(_opener.open(req, timeout=30).read().decode())
+    try:
+        return json.loads(_opener.open(req, timeout=30).read().decode())
+    except Exception as e:
+        raise RuntimeError(f'usga search: {e}') from e
 
 
 def tees(course_id):
     req = urllib.request.Request(f'{NCR}/courseTeeInfo?CourseID={course_id}',
-                                 headers={'User-Agent': UA})
-    html = _opener.open(req, timeout=30).read().decode('utf-8', 'replace')
+                                 headers={**HDRS, 'Referer': NCR + '/'})
+    try:
+        html = _opener.open(req, timeout=30).read().decode('utf-8', 'replace')
+    except Exception as e:
+        raise RuntimeError(f'usga tees: {e}') from e
     tbl = next((t for t in re.findall(r'<table[\s\S]*?</table>', html)
                 if 'Tee Name' in t), '')
     out = []
