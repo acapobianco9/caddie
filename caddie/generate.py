@@ -269,7 +269,7 @@ def _miss_cone(arc, total):
     return 45.0
 
 
-def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
+def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=None):
     line_ll = hole['l']
     if len(line_ll) < 2:
         return None
@@ -471,6 +471,53 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
     for f in chans[:2]:
         waste.append(rnd_pts(_resample(_buffer(f['g'], 11.0), 30)))
     waste = waste[:4]
+
+    # ---- ground the survey cannot tell us: imagery and the DEM (GEN 7) ----
+    gnd = ground or {}
+    arid = gnd.get('arid')
+    turf_r = float(gnd.get('turf_r') or 14.0)
+    turf = []
+    tl = gnd.get('turf') or []
+    if tl:
+        for x, y in rot(project(tl, lat0, lon0), ang):
+            if line_dist((x, y), line)[0] <= 210:
+                turf.append([round(x, 1), round(y, 1), turf_r])
+                if len(turf) >= 150:
+                    break
+
+    dunes, scarps = [], []
+    for r0 in (gnd.get('ridges') or []):
+        cq = rot(project(r0.get('c') or [], lat0, lon0), ang)
+        if len(cq) < 3 or min(line_dist(q, line)[0] for q in cq) > 200:
+            continue
+        fq = rot(project([r0.get('f') or r0['c'][0]], lat0, lon0), ang)[0]
+        # which side of the crest does the ground fall away? cross product of
+        # the crest direction with the direction to the fall point, so it
+        # stays right however the hole happens to be rotated
+        ax = (cq[-1][0] - cq[0][0], cq[-1][1] - cq[0][1])
+        mid = ((cq[0][0] + cq[-1][0]) / 2, (cq[0][1] + cq[-1][1]) / 2)
+        cr = ax[0] * (fq[1] - mid[1]) - ax[1] * (fq[0] - mid[0])
+        rec = {'c': rnd_pts(cq), 's': 1 if cr >= 0 else -1,
+               'h': r0.get('h', 0)}
+        (scarps if r0.get('k') == 'scarp' else dunes).append(rec)
+
+    # a measured bluff beside the water is a cliff hole even where OSM never
+    # drew the clifftop; and a course whose ground between the holes is bare
+    # and bright is a desert course, whatever the market says
+    if ground_biome in ('links', 'strand') and scarps and shore:
+        def _to_water(sc0):
+            return min(math.hypot(q[0] - s0[0], q[1] - s0[1])
+                       for q in sc0['c'] for s0 in shore)
+        best_sc = min(scarps, key=_to_water)
+        if _to_water(best_sc) < 150:
+            ground_biome = 'cliff'
+            if not cliffs:
+                shore = _resample([tuple(q) for q in best_sc['c']])
+    if (ground_biome == 'parkland' and arid is not None and arid >= 0.45
+            and not [f for f in keep if f['t'] == 'w']):
+        ground_biome = 'desert'
+    dunes = (dunes + scarps)[:6] if ground_biome in ('links', 'strand', 'cliff') else []
+    turf = turf if ground_biome == 'desert' else []
     # a crossing creek plays exactly like crossing water: fold streams into
     # every water-behaviour computation below
     wlike = waters + streams
@@ -672,6 +719,7 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
         'naip_sand': naip_sand,
         'rock_count': len(rocks),
         'biome': ground_biome,
+        'arid': arid,
         'elev_ft': (ep[-1] if (ep := _elev_prof(elev, line_ll, line, total))
                     else _elev_ft(elev, line_ll)),
     }
@@ -703,8 +751,8 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None):
         'mhw': (rnd_pts(_resample(min(coasts, key=lambda f: f['d'])['g']))
                 if (ground_biome == 'marsh' and coasts) else []),
         'waste': waste,
-        'dunes': [],      # 3DEP ridges — filled by the elevation stage
-        'turf': [],       # NAIP turf mask — filled by the imagery stage
+        'dunes': dunes,
+        'turf': turf,
         'facts': facts,
         'read': '', 'sign': '',
         '_srcs': ({id(greens[0]['src'])} if has_green else set())
@@ -723,7 +771,7 @@ def _cll(poly):
     return (sum(p[0] for p in poly) / len(poly), sum(p[1] for p in poly) / len(poly))
 
 
-def _synthesize(packs, holes, feats, woods, green_scorer=None):
+def _synthesize(packs, holes, feats, woods, green_scorer=None, ground=None):
     """The green synthesizer — stops partial courses two ways, honestly.
 
     A) CLAIM: a hole line exists but no green passed the filter. If an unused
@@ -754,7 +802,7 @@ def _synthesize(packs, holes, feats, woods, green_scorer=None):
         if not cands:
             continue
         g = min(cands, key=lambda g: _ydist(end, _cll(g)))
-        p2 = build_hole(h, feats, woods, claim_green=g)
+        p2 = build_hole(h, feats, woods, claim_green=g, ground=ground)
         if p2 and p2['has_green']:
             used |= p2.pop('_srcs', set())
             p2['claimed'] = True
@@ -843,7 +891,7 @@ def _synthesize(packs, holes, feats, woods, green_scorer=None):
         if r in taken_r or id(g) in taken_f or id(t) in taken_f:
             continue
         p = build_hole({'r': str(r), 'p': '', 'l': [list(tc), list(gc)]},
-                       feats, woods)
+                       feats, woods, ground=ground)
         if not p or not p['has_green']:
             continue
         p.pop('_srcs', None)
@@ -882,10 +930,13 @@ def _match_course_holes(holes, course_name):
     return out
 
 
-def build_course(data, green_scorer=None, elev=None):
+def build_course(data, green_scorer=None, elev=None, ground=None):
     """data = the pack format from osm.py. Returns (packs, coverage).
     green_scorer: optional NAIP turf-vote fn([lat,lon])->0..1 (see naip.py).
-    elev: optional DEM sampler fn([lat,lon])->meters (see naip.py)."""
+    elev: optional DEM sampler fn([lat,lon])->meters (see naip.py).
+    ground: optional imagery/DEM ground for the whole course (see naip.py):
+        {'turf': [[lat,lon],...], 'turf_r': yards, 'arid': 0..1,
+         'ridges': [{'k','h','c':[[lat,lon],...],'f':[lat,lon]}, ...]}"""
     holes = [h for h in data['h'] if str(h.get('r', '')).isdigit()]
     holes = _match_course_holes(holes, data['c'].get('n', ''))
     holes.sort(key=lambda h: int(h['r']))
@@ -893,9 +944,10 @@ def build_course(data, green_scorer=None, elev=None):
     feats = [(t, g) for t, g in data['f'] if t != 'x']
     packs = []
     for h in holes:
-        p = build_hole(h, feats, woods, seed=int(h['r']), elev=elev)
+        p = build_hole(h, feats, woods, seed=int(h['r']), elev=elev, ground=ground)
         if p: packs.append(p)
-    packs = _synthesize(packs, holes, feats, woods, green_scorer=green_scorer)
+    packs = _synthesize(packs, holes, feats, woods, green_scorer=green_scorer,
+                        ground=ground)
     # ---- course-aware voice pass: ranks, then compose with no repeats ----
     if packs:
         last = max(p['hole'] for p in packs)
