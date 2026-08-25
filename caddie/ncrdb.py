@@ -153,6 +153,7 @@ def main():
         keys = [arg]
     names = {c['key']: c['name'] for c in _sb_all('courses?select=key,name&order=key.asc')}
     ok = miss = 0
+    last = 'never ran'
     for k in keys:
         try:
             res = sync_course(k, names.get(k, k))
@@ -160,12 +161,20 @@ def main():
                 miss += 1
             else:
                 ok += 1
+            last = res
             print(f'{k}: {res}', flush=True)
         except Exception as e:
             miss += 1
+            last = f'{type(e).__name__}: {e}'
             print(f'{k}: ERROR {e}', flush=True)
             time.sleep(5)
     print(f'done: {ok} synced/fresh, {miss} unmatched')
+    # A single-course spot-fix that quietly does nothing is a failure, not a
+    # success. Exit non-zero and put the reason in the message so it shows up
+    # as an annotation instead of hiding in the log.
+    if arg != '--all' and ok == 0:
+        sys.exit(f'ncrdb: {keys[0]} did not sync ({last}); name searched = '
+                 f'{names.get(keys[0], keys[0])!r}')
 
 
 if __name__ == '__main__':
