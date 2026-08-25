@@ -49,7 +49,15 @@ BASE_MIRROR = int(os.environ.get('SWEEP_MIRROR', '0'))  # spread parallel lanes 
 #    from 3DEP. Three grounds ship - parkland, desert, links - and a hole
 #    with no signal stays parkland, so this can only add. Also finds the
 #    forward tees and measures the hole from each one.
-GEN = 7
+# 8: what GEN 7's first real pass exposed. (a) A golf=penalty_area with no
+#    water in it is GROUND, not water - post-2019 tagging files desert scrub
+#    and native area under that key and we painted every one blue, including a
+#    603-yard one at Angeles National. That, not the intermittent wash, was
+#    "water world". (b) Desert no longer requires a course to have zero water,
+#    so every desert course with an irrigation pond stops coming back parkland.
+#    (c) A clifftop only makes a seaside hole if there is a coastline near it -
+#    inland canyon walls were drawing an ocean in the foothills.
+GEN = 8
 
 
 def rest(method, path, payload=None, params=''):
