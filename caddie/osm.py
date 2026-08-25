@@ -52,6 +52,18 @@ def _dry(tags):
             or tags.get('basin') in ('detention', 'infiltration'))
 
 
+def _wet(tags):
+    """True only when the survey says there is actually water in this thing.
+
+    Post-2019 tagging files desert scrub, native area and dry wash under
+    golf=penalty_area, and TYPE_CODE was painting every one of them blue.
+    That — not the intermittent wash — is what made Angeles National look like
+    a water park: seven scrub penalty areas, one of them 603 yards long.
+    """
+    return bool(tags.get('natural') == 'water' or tags.get('water')
+                or tags.get('waterway') or tags.get('landuse') == 'reservoir')
+
+
 def _clip(pts, la0, lo0, la1, lo1):
     """The longest run of a way that lies inside the box, plus one point
     either side so the line leaves the frame instead of stopping short.
@@ -120,6 +132,10 @@ def fetch_course(key, name, market, lat, lng, pad=0.020, mirror=0):
         t = TYPE_CODE.get(golf)
         if not t:
             continue
+        # a penalty area with no water in it is ground you take a stroke in,
+        # not water you carry. It still matters; it just isn't blue.
+        if t == 'w' and (not _wet(tags) or _dry(tags)):
+            t = 'P'
         g = _dp([[round(p['lat'], 5), round(p['lon'], 5)] for p in e['geometry']], 0.00004)
         if len(g) >= (3 if t != 't' else 2):
             feats.append([t, g])
