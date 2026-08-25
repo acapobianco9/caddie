@@ -542,6 +542,15 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
     # just don't claim a look that hasn't been signed off. Turning any of them
     # back on is this one dict and nothing else.
     ground_biome = SHIP.get(ground_biome, 'parkland')
+    # The turf mask has to actually land on this golf course to be worth
+    # anything. At Angeles National the greenest ground in the NAIP chip sits a
+    # median 1,233 yards from the nearest playing line — riparian scrub in the
+    # canyon, not fairway. A mask that misses the holes is worse than no mask,
+    # because the renderer would trust it.
+    if turf and sum(1 for tx, ty, _ in turf
+                    if line_dist((tx, ty), line)[0] < 70) < 6:
+        turf = []
+
     turf = turf if ground_biome == 'desert' else []
     if ground_biome == 'parkland':
         shore, dunes = [], []      # waste stays: it changes how the hole plays
