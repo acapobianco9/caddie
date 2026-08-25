@@ -329,7 +329,16 @@ def analyze(lat, lng):
         hh, ww = (H // GT) * GT, (W // GT) * GT
         ndb = nd[:hh, :ww].reshape(hh // GT, GT, ww // GT, GT).mean(axis=(1, 3))
         rdb = red[:hh, :ww].reshape(hh // GT, GT, ww // GT, GT).mean(axis=(1, 3))
-        turf_m = ndb > 0.32
+        # exportImage applies its own contrast stretch, so absolute NDVI is not
+        # comparable between chips: the same healthy fairway reads 0.24 on one
+        # course and 0.12 on the next, and a fixed 0.32 caught essentially
+        # nothing on any course we tested. Threshold against THIS chip's own
+        # distribution instead — turf is the green tail, wherever it sits.
+        _s = np.sort(ndb.ravel())
+        _med = float(_s[_s.size // 2])
+        _p90 = float(_s[int(_s.size * 0.90)])
+        turf_thr = max(0.10, _med + 0.35 * (_p90 - _med))
+        turf_m = ndb > turf_thr
         bare_m = (ndb < 0.16) & (rdb > 95.0)
         off = int(turf_m.size - turf_m.sum())
         arid = round(float(bare_m.sum()) / max(1, off), 3)
@@ -381,6 +390,7 @@ def analyze(lat, lng):
             return s
         return {'feats': feats, 'green_scorer': green_scorer,
                 'turf': turf, 'turf_r': turf_r, 'arid': arid,
+                'turf_thr': round(turf_thr, 3),
                 'sand_ok': sand_ok}
     except Exception:
         return None
