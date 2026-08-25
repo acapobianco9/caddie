@@ -19,13 +19,12 @@ KEY = os.environ['SUPABASE_SERVICE_KEY']
 SBH = {'apikey': KEY, 'Authorization': 'Bearer ' + KEY,
        'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates'}
 NCR = 'https://ncrdb.usga.org'
-# The NCRDB sits behind a WAF that answers 403 to a bare bot user-agent, so we
-# present as a browser — but we keep identifying ourselves and leave a contact
-# on the end of the string rather than pretending to be someone else. Two
-# requests per course, 1.5 s apart, is the whole of our footprint.
-UA = ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
-      '(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 '
-      'YoinkCaddie/1.0 (+contact: anthony@amg-demolition.com)')
+# We identify ourselves honestly. A browser user-agent was tried on 25 Aug 2026
+# and the NCRDB still answered 403 to the very first GET, so the block is on
+# the datacenter IP, not the user-agent — and dressing up as a browser to get
+# around a deliberate access control is not something we do. See the note in
+# the module docstring about where this data has to come from instead.
+UA = 'YoinkCaddie/1.0 (course tee names; contact: anthony@amg-demolition.com)'
 HDRS = {'User-Agent': UA,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9'}
