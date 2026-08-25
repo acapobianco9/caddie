@@ -101,10 +101,16 @@ def _sb(method, path, payload=None):
 
 
 def sync_course(key, name):
-    # freshness check
+    # freshness check. The cutoff is computed HERE, not in the query:
+    # PostgREST does not evaluate SQL in a filter value, so the old
+    # `updated_at=gte.now()-interval'180 days'` was not a timestamp at all and
+    # PostgREST answered 400 for every course. The per-course try/except then
+    # swallowed it and the job still exited 0 — a silent total failure.
     q = urllib.parse.quote
+    cutoff = time.strftime('%Y-%m-%dT%H:%M:%SZ',
+                           time.gmtime(time.time() - REFRESH_DAYS * 86400))
     fresh = json.loads(_sb('GET', f'course_tees?select=updated_at&course_key=eq.{q(key)}'
-                                  f'&updated_at=gte.now()-interval%27{REFRESH_DAYS}%20days%27&limit=1'))
+                                  f'&updated_at=gte.{q(cutoff)}&limit=1'))
     if fresh:
         return 'fresh'
     cands = search(name)
