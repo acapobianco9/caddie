@@ -110,6 +110,19 @@ LAT3 = [
     "Water on the {wside}, but it's a spectator unless you invite it in.",
 ]
 
+# Water down BOTH sides. There is no "other half" to favour, so these never
+# offer one -- the old sentences did, and on 52 of 291 sampled holes they
+# pointed at the lake.
+LATERAL_BOTH = [
+    "Water down both sides \u2014 there is no bail-out here, only the fairway.",
+    "It is wet left and wet right; staying between them is the whole plan.",
+    "Both edges are water. Take whatever club keeps you in the corridor.",
+]
+LAT3_BOTH = [
+    "Water either side of this one \u2014 the green is the only dry miss.",
+    "Wet left, wet right. Hit the green or take your medicine.",
+]
+
 # --- approach / green sentences ---
 
 DEEP = [
@@ -159,6 +172,8 @@ def compose_read(facts, rng, used):
             s.append(_pick(rng, used, CROSS3, wat=f['cross'][0]))
         elif f.get('gside_water'):
             pass  # let the green sentence carry it
+        elif f.get('lateral') == 'both':
+            s.append(_pick(rng, used, LAT3_BOTH))
         elif f.get('lateral'):
             s.append(_pick(rng, used, LAT3, wside=f['lateral']))
         else:
@@ -177,6 +192,8 @@ def compose_read(facts, rng, used):
             s.append(_pick(rng, used, BEND, dir=f['bend']['dir'], at=f['bend']['at']))
         elif f.get('cross'):
             s.append(_pick(rng, used, CROSS45, wat=f['cross'][0]))
+        elif f.get('lateral') == 'both':
+            s.append(_pick(rng, used, LATERAL_BOTH))
         elif f.get('lateral'):
             s.append(_pick(rng, used, LATERAL, wside=f['lateral'], other=other[f['lateral']]))
         elif f.get('key_bunker'):
@@ -192,6 +209,8 @@ def compose_read(facts, rng, used):
         # second crossing rides along with a bend
         if f.get('bend') and f.get('cross') and len(s) == 1 and len(f['cross']) == 1:
             s.append(_pick(rng, used, CROSS45, wat=f['cross'][0]))
+        elif f.get('bend') and f.get('lateral') == 'both' and len(s) == 1:
+            s.append(_pick(rng, used, LATERAL_BOTH))
         elif f.get('bend') and f.get('lateral') and len(s) == 1:
             s.append(_pick(rng, used, LATERAL, wside=f['lateral'], other=other[f['lateral']]))
     # --- sentence 2: the approach / green ---
