@@ -123,8 +123,8 @@ def geo_from_osm(course, packs):
     feats = osm.fetch_course(course['key'], course.get('name') or '',
                              course.get('market_key') or '',
                              info.get('lat'), info.get('lng'))
-    holes = (feats or {}).get('holes') or []
-    out = {}
+    holes = (feats or {}).get('h') or []      # fetch_course returns 'h'
+    good = []
     for h in holes:
         ll = h.get('l') or []
         if len(ll) < 2:
@@ -132,11 +132,21 @@ def geo_from_osm(course, packs):
         lat0, lon0 = ll[0]
         ln = project(ll, lat0, lon0)
         ang = -math.atan2(ln[-1][0] - ln[0][0], -(ln[-1][1] - ln[0][1]))
-        try:
-            num = int(str(h.get('n') or h.get('ref') or '').strip() or 0)
-        except ValueError:
-            num = 0
-        out.setdefault(num, {'lat': lat0, 'lon': lon0, 'ang': ang})
+        # the hole number lives in 'r' (ref); 'n' is the NAME, which on a
+        # multi-course property reads "Black 1", not "1"
+        m = re.search(r'(\d{1,2})\s*$', str(h.get('r') or h.get('n') or ''))
+        good.append((int(m.group(1)) if m else 0,
+                     {'lat': lat0, 'lon': lon0, 'ang': ang}))
+    out = {}
+    for num, g in good:
+        if num:
+            out.setdefault(num, g)
+    # no usable refs: fall back to survey order, which is how the packs were
+    # numbered in the first place
+    if not out and good:
+        for i, (_, g) in enumerate(good, 1):
+            out[i] = g
+    print(f'osm georeference: {len(out)} of {len(holes)} holes', flush=True)
     return out
 
 
@@ -250,6 +260,9 @@ document.querySelectorAll('.sl').forEach(function(s){{
   }});
 }});
 </script></body></html>'''
+
+    if not cards:
+        sys.exit('no holes could be georeferenced -- nothing to compare')
 
     os.makedirs(os.path.join(ROOT, 'demo'), exist_ok=True)
     out = os.path.join(ROOT, 'demo', f'truth_{key}.html')
