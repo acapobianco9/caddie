@@ -124,23 +124,19 @@ def get_catalog(market=None, course=None, limit=None):
     return out
 
 
-# Sweep order. The catalog was walked in key order, which is how a 340-minute
-# lane can spend its entire budget inside the a-keys of a freshly imported batch
-# and never reach a course that already has a book. Bumping GEN is meant to push
-# a fix out to real hole cards; alphabetical order decided it reached them days
-# later, if at all. On the GEN 8 pass that meant 42 courses swept, every one of
-# them 'none', while 1,599 GEN 7 rows carrying the water-world and desert bugs
-# waited their turn.
+# QUEUE ORDER. A course with no coverage row has no card at all; a course
+# already rendered has one that is merely a generation behind. So untouched
+# courses go first, then the ones whose fetch failed, then re-renders, and
+# last the ones OSM had nothing for.
 #
-# So walk the catalog in the order the sweep actually exists for:
-#   0  already renders (full/partial) on a stale generator — the courses that
-#      are carrying whatever the new GEN fixes, fullest book first
-#   1  last sweep errored — cheap to retry and usually a transient Overpass 504
-#   2  never attempted
-#   3  attempted before and OSM had nothing — real, but of the four the least
-#      likely to have changed since
+# It ran the other way round until Aug 26 2026, and the cost was measurable:
+# 2,471 of 4,974 catalog courses had never been swept at all, and with
+# rendered-first the run was adding new courses at 18/hr while doing 71/hr
+# overall -- three quarters of the work went to courses that already had a
+# drawing. At that rate the untouched half of the catalog was six days out.
+#
 # Ties break on key so lanes resume deterministically across cron relaunches.
-PRIO_RENDERED, PRIO_ERROR, PRIO_NEW, PRIO_EMPTY = 0, 1, 2, 3
+PRIO_NEW, PRIO_ERROR, PRIO_RENDERED, PRIO_EMPTY = 0, 1, 2, 3
 
 
 def coverage_state(keys):
