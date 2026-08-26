@@ -239,6 +239,98 @@ def corridor_stats(c, bbox, H, W, holes, near_yd=25.0, flank_lo=40.0, flank_hi=9
             'turf_flank': pct(c['turf'], fl)}
 
 
+
+# ---- parameter sweep -------------------------------------------------------
+# Three suspects for why the first run found no contrast between the corridor
+# and its flank (1 of 10 courses passed, median gap 2.0 points):
+#   1. an 11 m cell straddles the fairway edge, so edge cells contain both
+#      mown turf and treeline, read rough, and smear canopy onto the corridor
+#   2. boundary cells belong to neither class and should be dropped
+#   3. a 25-yard "on the line" band is already in the treeline on a tight
+#      hole, which makes the test unfair to itself
+# All three are measured together here, off one chip fetch per course.
+
+CONFIGS = [(6, 0), (6, 1), (11, 0), (11, 1)]     # (cell px, erode passes)
+BANDS = [12.0, 25.0]                             # "on the line" half-width, yd
+
+
+def erode(mask, passes=1):
+    """Drop cells that touch a non-canopy neighbour: a boundary cell contains
+    both classes and belongs to neither."""
+    import numpy as np
+    m = mask
+    for _ in range(passes):
+        k = np.ones_like(m)
+        k[1:, :] &= m[:-1, :]
+        k[:-1, :] &= m[1:, :]
+        k[:, 1:] &= m[:, :-1]
+        k[:, :-1] &= m[:, 1:]
+        m = m & k
+    return m
+
+
+def dist_grid(c, bbox, H, W, holes):
+    """Yards from each cell centre to the nearest playing line."""
+    import numpy as np
+    cell = c['cell']
+    gh, gw = c['shape']
+    mpx_x = (bbox[2] - bbox[0]) * 111320.0 * math.cos(
+        math.radians((bbox[1] + bbox[3]) / 2)) / W
+    mpx_y = (bbox[3] - bbox[1]) * 110540.0 / H
+    yd_x = mpx_x * cell * 1.0936
+    yd_y = mpx_y * cell * 1.0936
+    gy, gx = np.mgrid[0:gh, 0:gw]
+    cy = ((gy + 0.5) * yd_y).astype(np.float32)
+    cx = ((gx + 0.5) * yd_x).astype(np.float32)
+
+    def to_cellyd(ll):
+        px = (ll[1] - bbox[0]) / (bbox[2] - bbox[0]) * W / cell
+        py = (bbox[3] - ll[0]) / (bbox[3] - bbox[1]) * H / cell
+        return px * yd_x, py * yd_y
+
+    best = np.full((gh, gw), 1e9, dtype=np.float32)
+    segs = 0
+    for h in holes:
+        ll = h.get('l') or []
+        if len(ll) < 2:
+            continue
+        pts = [to_cellyd(q) for q in ll]
+        for i in range(len(pts) - 1):
+            ax, ay = pts[i]; bx, by = pts[i + 1]
+            dx, dy = bx - ax, by - ay
+            L = dx * dx + dy * dy
+            if L < 1e-9:
+                continue
+            t = np.clip(((cx - ax) * dx + (cy - ay) * dy) / L, 0.0, 1.0)
+            np.minimum(best, np.hypot(cx - (ax + t * dx), cy - (ay + t * dy)), out=best)
+            segs += 1
+    return (best, segs) if segs else (None, 0)
+
+
+def param_matrix(nir, red, bbox, H, W, holes):
+    """Every (cell, erode, band) combination, off one chip."""
+    out = []
+    for cell, er in CONFIGS:
+        c = classify(nir, red, cell=cell)
+        can = erode(c['canopy'], er) if er else c['canopy']
+        best, segs = dist_grid(c, bbox, H, W, holes)
+        if best is None:
+            continue
+        for band in BANDS:
+            on = best <= band
+            fl = (best > 40.0) & (best <= 90.0)
+            def pct(m, sel):
+                n = int(sel.sum())
+                return None if n == 0 else round(100.0 * float((m & sel).sum()) / n, 1)
+            o, f = pct(can, on), pct(can, fl)
+            out.append({'cell': cell, 'erode': er, 'band': band,
+                        'sep': round(c['otsu_sep'], 3),
+                        'canopy': round(float(can.mean()) * 100, 1),
+                        'on': o, 'flank': f,
+                        'gap': None if (o is None or f is None) else round(f - o, 1)})
+    return out
+
+
 def one(key):
     """Run the classifier over one course. Returns a row for the index."""
     q = urllib.parse.quote(key, safe='')
@@ -254,7 +346,7 @@ def one(key):
     H, W = nir.shape
     c = classify(nir, red)
 
-    st, feats = None, None
+    st, feats, mx = None, None, []
     try:
         import osm
         feats = osm.fetch_course(key, course.get('name') or '',
@@ -262,6 +354,7 @@ def one(key):
         holes = (feats or {}).get('h') or []
         if holes:
             st = corridor_stats(c, bbox, H, W, holes)
+            mx = param_matrix(nir, red, bbox, H, W, holes)
     except Exception as e:                      # OSM is a nice-to-have here
         print(f'  [{key}] corridor stats unavailable: {e}', flush=True)
 
@@ -272,6 +365,7 @@ def one(key):
            'turf': round(float(c['turf'].mean()) * 100, 1),
            'short': round(float(c['short'].mean()) * 100, 1),
            'holes': len((feats or {}).get('h') or [])}
+    row['matrix'] = mx
     row.update(st or {})
     row['verdict'] = verdict(row)
     write_page(key, course, bbox, H, W, c, st)
@@ -389,6 +483,70 @@ def write_index(rows):
     open(os.path.join(ROOT, 'demo', 'canopy_index.html'), 'w').write(html)
 
 
+
+def write_matrix(rows):
+    """Which parameter combination, if any, actually separates the corridor
+    from its flank. One row per (cell, erode, band); the median gap across
+    courses is the number that decides it."""
+    import statistics
+    have = [r for r in rows if r.get('matrix')]
+    if not have:
+        return
+    keys, agg = [], {}
+    for r in have:
+        for m in r['matrix']:
+            k = (m['cell'], m['erode'], m['band'])
+            if k not in agg:
+                agg[k] = []
+                keys.append(k)
+            if m['gap'] is not None:
+                agg[k].append((r['name'], m))
+    trs = []
+    for k in keys:
+        items = agg[k]
+        gaps = [m['gap'] for _, m in items]
+        if not gaps:
+            continue
+        med = statistics.median(gaps)
+        passes = sum(1 for _, m in items
+                     if m['gap'] >= 10 and (m['on'] or 0) <= 25)
+        cls = 'ok' if med >= 10 else 'bad'
+        trs.append(f'<tr class="{cls}"><td class="n">{k[0]}</td><td class="n">{k[1]}</td>'
+                   f'<td class="n">{k[2]:.0f}</td><td class="n">{med:.1f}</td>'
+                   f'<td class="n">{min(gaps):.1f}</td><td class="n">{max(gaps):.1f}</td>'
+                   f'<td class="n">{passes} / {len(gaps)}</td></tr>')
+    det = []
+    for r in have:
+        cells = ''.join(f'<td class="n">{"" if m["gap"] is None else m["gap"]}</td>'
+                        for m in r['matrix'])
+        det.append(f'<tr><td>{r["name"]}</td>{cells}</tr>')
+    hdr = ''.join(f'<th>{m["cell"]}px e{m["erode"]}<br>b{m["band"]:.0f}</th>'
+                  for m in have[0]['matrix'])
+    html = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<title>Canopy parameter sweep</title>'
+            '<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600'
+            '&family=Archivo:wght@400;600&display=swap" rel="stylesheet">'
+            '<style>' + INDEX_CSS + ' td,th{padding:7px 10px}</style>'
+            '</head><body><div class="wrap"><h1>Canopy parameter sweep</h1>'
+            '<p class="dek">Cell size, erosion and the width of the on-the-line band, '
+            'every combination measured off the same chips. <b>Gap</b> is canopy in the '
+            'flank minus canopy on the line: it is the whole test, because a classifier '
+            'that is only painting green ground green scores zero here however good the '
+            'overlay looks. A row passes a course when the gap clears 10 points and no '
+            'more than a quarter of the corridor is called canopy. Handed a synthetic '
+            'scene with a treeline planted 40&ndash;90 yards out, this harness scores '
+            'a gap of 96, so a low number here is the courses talking, not the ruler.</p>'
+            '<table><thead><tr><th>Cell px</th><th>Erode</th><th>Band yd</th>'
+            '<th>Median gap</th><th>Min</th><th>Max</th><th>Courses passing</th></tr>'
+            f'</thead><tbody>{"".join(trs)}</tbody></table>'
+            '<h1 style="font-size:22px;margin-top:38px">Per course</h1>'
+            f'<table><thead><tr><th>Course</th>{hdr}</tr></thead>'
+            f'<tbody>{"".join(det)}</tbody></table></div></body></html>')
+    os.makedirs(os.path.join(ROOT, 'demo'), exist_ok=True)
+    open(os.path.join(ROOT, 'demo', 'canopy_matrix.html'), 'w').write(html)
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit('usage: canopy.py <course_key>[,<course_key>...]')
@@ -403,8 +561,9 @@ def main():
     if not [r for r in rows if not r.get('error')]:
         sys.exit('every course failed')
     write_index(rows)
+    write_matrix(rows)
     okn = sum(1 for r in rows if r.get('verdict') == 'ok')
-    print(f'wrote demo/canopy_index.html  ({okn} of {len(rows)} pass)', flush=True)
+    print(f'wrote demo/canopy_index.html and canopy_matrix.html  ({okn} of {len(rows)} pass)', flush=True)
 
 
 if __name__ == '__main__':
