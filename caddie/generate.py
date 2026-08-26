@@ -574,29 +574,6 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
 
     turf = turf if ground_biome == 'desert' else []
 
-    # With a mask that survived that check, the imagery can say where the turf
-    # starts even when OSM never mapped a fairway — which on a desert hole is
-    # the difference between an honest forced carry and a blank corridor.
-    # Measured, guarded, and it never overrules a surveyed fairway.
-    if fw is None and turf and par > 3:
-        runs, run, a = [], None, 0.0
-        while a <= total:
-            q = point_at_arc(line, a)
-            if any((q[0] - tx) ** 2 + (q[1] - ty) ** 2 < tr * tr for tx, ty, tr in turf):
-                run = [a, a] if run is None else [run[0], a]
-            else:
-                if run and run[1] - run[0] >= 45:
-                    runs.append(run)
-                run = None
-            a += 8.0
-        if run and run[1] - run[0] >= 45:
-            runs.append(run)
-        if runs:
-            fw = [[int(round(s)), int(round(e))] for s, e in runs]
-            fw_start = fw[0][0] if fw[0][0] >= 100 else None
-            if fw_start and len(carries) < 2 and all(abs(fw_start - c['at']) > 25 for c in carries):
-                carries.append({'kind': 'fairway', 'at': fw_start})
-
     if ground_biome == 'parkland':
         shore, dunes = [], []      # waste stays: it changes how the hole plays
     if ground_biome == 'desert':
@@ -668,6 +645,26 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
         bb = max(bz, key=lambda b: area(b['g']))
         if all(abs(bb['far'] - s) > 25 for s in seen):
             carries.append({'kind': 'sand', 'at': int(round(bb['far']))})
+    # With a mask that survived that check, the imagery can say where the turf
+    # starts even when OSM never mapped a fairway — which on a desert hole is
+    # the difference between an honest forced carry and a blank corridor.
+    # Measured, guarded, and it never overrules a surveyed fairway.
+    if fw is None and turf and par > 3:
+        runs, run, a = [], None, 0.0
+        while a <= total:
+            q = point_at_arc(line, a)
+            if any((q[0] - tx) ** 2 + (q[1] - ty) ** 2 < tr * tr for tx, ty, tr in turf):
+                run = [a, a] if run is None else [run[0], a]
+            else:
+                if run and run[1] - run[0] >= 45:
+                    runs.append(run)
+                run = None
+            a += 8.0
+        if run and run[1] - run[0] >= 45:
+            runs.append(run)
+        if runs:
+            fw = [[int(round(s)), int(round(e))] for s, e in runs]
+
     fw_start = fw[0][0] if (fw and fw[0][0] >= 100) else None
     if fw_start and len(carries) < 2 and all(abs(fw_start - c['at']) > 25 for c in carries):
         carries.append({'kind': 'fairway', 'at': fw_start})
