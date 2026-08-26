@@ -596,13 +596,16 @@ def render_hole(p, course_name, market=''):
         wpx.append(P)
         ext = max(max(q[0] for q in wply) - min(q[0] for q in wply),
                   max(q[1] for q in wply) - min(q[1] for q in wply))
-        # A hazard is a thing you can see the far side of. Relative-only was
-        # the bug: a 512-yard lake on a 500-yard hole failed `> total * 1.15`
-        # by sixty yards and got filled in straight across the corridor.
-        # Measured on 1,657 GEN 9 water polygons: median 144 yd, p90 424 yd.
-        # 260 absolute + 0.85 relative moves 228 polygons off the fill and
-        # leaves 1,189 real ponds alone.
-        oversize.append(ext > 260 or ext > total * 0.85)
+        # A hazard is a thing you can see the far side of, and that is an
+        # ABSOLUTE fact about the water, not a ratio against the hole. The old
+        # `ext > total * 1.15` let a 512-yard lake on a 500-yard hole fill in
+        # straight across the corridor; scaling the ratio down instead broke
+        # the opposite end, demoting the 93-yard pond in front of a 107-yard
+        # par 3 - which is the entire hole. Measured on 1,657 GEN 9 water
+        # polygons (median 144 yd, p90 424 yd): a flat 260-yard cap leaves
+        # every pond under 260 filled, including 184 of the 229 short-par-3
+        # waters, and catches all 108 polygons the ratio rule was flooding.
+        oversize.append(ext > 260)
 
     for P, big in zip(wpx, oversize):
         dw = catmull(P, True)
