@@ -596,7 +596,13 @@ def render_hole(p, course_name, market=''):
         wpx.append(P)
         ext = max(max(q[0] for q in wply) - min(q[0] for q in wply),
                   max(q[1] for q in wply) - min(q[1] for q in wply))
-        oversize.append(ext > total * 1.15)
+        # A hazard is a thing you can see the far side of. Relative-only was
+        # the bug: a 512-yard lake on a 500-yard hole failed `> total * 1.15`
+        # by sixty yards and got filled in straight across the corridor.
+        # Measured on 1,657 GEN 9 water polygons: median 144 yd, p90 424 yd.
+        # 260 absolute + 0.85 relative moves 228 polygons off the fill and
+        # leaves 1,189 real ponds alone.
+        oversize.append(ext > 260 or ext > total * 0.85)
 
     for P, big in zip(wpx, oversize):
         dw = catmull(P, True)
@@ -1065,7 +1071,7 @@ body{font-family:'Archivo',sans-serif;background:var(--paper);color:var(--ink);p
 .holeart .surf{fill:none;stroke:#FFFFFF;stroke-width:3.2;opacity:.90;stroke-linecap:round}
 .holeart .cliff-e{fill:none;stroke:var(--ink);stroke-width:1.6;opacity:.62}
 .holeart .mhw{fill:none;stroke:#5F7C88;stroke-width:1.2;opacity:.55;stroke-dasharray:7 6}
-.holeart .wat-big{fill:var(--water-d);fill-opacity:.30;stroke:none}
+.holeart .wat-big{fill:var(--water-d);fill-opacity:.12;stroke:none}
 .holeart .wat-o{fill:none;stroke:var(--ink);stroke-width:1.4;stroke-linejoin:round}
 .holeart .shallow{fill:var(--water);stroke:none}
 .holeart .shot{stroke:var(--forest);stroke-width:1.2;stroke-dasharray:2 4;fill:none;opacity:.7}
