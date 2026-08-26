@@ -25,6 +25,10 @@ try:
     import naip                      # stage 2.5 — needs pillow+numpy
 except Exception:
     naip = None                      # OSM-only sweep still works
+try:
+    import chm                       # stage 2.6 — needs rasterio
+except Exception:
+    chm = None                       # OSM-only timber still works
 
 SUPA = os.environ.get('SUPABASE_URL', '').rstrip('/')
 KEY = os.environ.get('SUPABASE_SERVICE_KEY', '')
@@ -72,7 +76,18 @@ BASE_MIRROR = int(os.environ.get('SWEEP_MIRROR', '0'))  # spread parallel lanes 
 #    dry channel, scrub penalty area, or sand that is not a beach) AND the
 #    chip has to read bare. Also records arid_sep, a contrast-invariant
 #    aridity metric, so the next pass produces data to calibrate against.
-GEN = 9
+# 10: trees, measured. Nine generations of timber came out of OSM, which is
+#    volunteered and thin — Idyl Wyld had none mapped at all, and Bobby
+#    Jones's nearest wood polygon sat a median 567 yards from its own holes.
+#    A NAIP texture classifier built to fill the gap cleared its own bar on
+#    1 course in 10. GEN 10 reads the WRI/Meta canopy height model instead,
+#    a measurement at about a metre a pixel, and asks OSM only where the
+#    raster does not reach. Mapped buildings are subtracted by footprint,
+#    not by texture: the roughness filter that looked right on a synthetic
+#    scene dropped only 8-19% of real roof pixels while eating a fifth to a
+#    half of all canopy, so it is not used. New facts: chute_pct, timber
+#    per side, tree_side, timber_measured.
+GEN = 10
 
 
 def rest(method, path, payload=None, params=''):
@@ -255,8 +270,19 @@ def main():
                         gnd['ridges'] = ridges
                     except Exception:
                         pass
+                # stage 2.6: one canopy-height chip per course. Best-effort
+                # exactly like NAIP — a course with no tile ships on OSM
+                # timber, it never fails for want of a raster.
+                canopy = None
+                if chm is not None:
+                    try:
+                        canopy = chm.sampler(c['lat'], c['lng'], data['f'])
+                    except Exception as ce:
+                        print(f"    canopy unavailable: {type(ce).__name__}: "
+                              f"{str(ce)[:90]}", flush=True)
                 packs, cov = generate.build_course(data, green_scorer=scorer,
-                                                   elev=esamp, ground=gnd or None)
+                                                   elev=esamp, ground=gnd or None,
+                                                   canopy=canopy)
                 if args.dry:
                     print(json.dumps(cov))
                 else:
