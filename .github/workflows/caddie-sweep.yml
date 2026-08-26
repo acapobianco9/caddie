@@ -26,8 +26,13 @@ on:
         description: "re-sweep courses already done (true/false)"
         required: false
         default: "false"
-  schedule:
-    - cron: "25 */6 * * *"   # relaunch every 6h until the catalog is done
+  # PAUSED 2026-08-26 while the GEN 10 tree threshold is settled. The first
+  # GEN 10 course put first timber within 15 yards of the centreline on 31 of
+  # 36 hole sides, which is not a golf course -- a single 3m pixel is enough
+  # to plant a treeline, and turf-height noise clears 3m. Restore this line
+  # once the mask is measured against the aerial. Manual dispatch still works.
+  # schedule:
+  #   - cron: "25 */6 * * *"   # relaunch every 6h until the catalog is done
 
 jobs:
   sweep:
