@@ -1,0 +1,50 @@
+name: caddie-canopy
+
+# PROTOTYPE. Runs the NAIP texture classifier over one course and commits a
+# page showing what it found, drawn on the aerial. Nothing here feeds the
+# packs yet -- this exists so the classification can be looked at before any
+# of it is believed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      course:
+        description: "course_key (e.g. atl_bobby_jones)"
+        required: true
+
+jobs:
+  canopy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numpy and pillow
+        run: pip install numpy pillow
+
+      - name: Classify the chip
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          COURSE: ${{ github.event.inputs.course }}
+        run: |
+          set -euo pipefail
+          test -f caddie/canopy.py
+          python caddie/canopy.py "$COURSE"
+          test -s "demo/canopy_${COURSE}.html"
+
+      - name: Commit the page
+        env:
+          COURSE: ${{ github.event.inputs.course }}
+        run: |
+          set -euo pipefail
+          git config user.name "caddie-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add demo/
+          git commit -m "canopy: $COURSE" || echo "nothing to commit"
+          git push
