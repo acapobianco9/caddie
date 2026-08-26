@@ -342,6 +342,30 @@ def analyze(lat, lng):
         bare_m = (ndb < 0.16) & (rdb > 95.0)
         off = int(turf_m.size - turf_m.sum())
         arid = round(float(bare_m.sum()) / max(1, off), 3)
+        # `arid` above keys off absolute NDVI and red, which the paragraph two
+        # comments up already explains is not comparable between chips —
+        # exportImage stretches each one. Measured across the catalog on
+        # Aug 25 2026 it showed exactly that disease: median arid came out
+        # 0.609 in Chicago against 0.328 in Washington, and 47% of Chicago
+        # first holes were being drawn as desert. It is kept because the
+        # desert gate is calibrated against it, but it is no longer allowed to
+        # promote a hole on its own (see generate.py).
+        #
+        # `arid_sep` is the honest version of the same question and survives a
+        # per-chip linear stretch, because every term is a difference divided
+        # by a spread from the same chip: how far the irrigated ground sits
+        # above everything else. On parkland the rest of the chip is trees and
+        # rough, so the gap is small. On desert the rest is bare ground, so it
+        # is large. Recorded now, uncalibrated, so the next full pass produces
+        # the data to calibrate a threshold against.
+        _p05 = float(_s[int(_s.size * 0.05)])
+        _p95 = float(_s[int(_s.size * 0.95)])
+        _spread = max(_p95 - _p05, 1e-6)
+        if turf_m.any() and (~turf_m).any():
+            _sep = float(np.median(ndb[turf_m]) - np.median(ndb[~turf_m]))
+            arid_sep = round(max(0.0, _sep / _spread), 3)
+        else:
+            arid_sep = None
         tys, txs = np.nonzero(turf_m)
         turf = [[round(bbox[3] - (int(y) * GT + GT / 2) / H * (bbox[3] - bbox[1]), 6),
                  round(bbox[0] + (int(x) * GT + GT / 2) / W * (bbox[2] - bbox[0]), 6)]
@@ -390,6 +414,7 @@ def analyze(lat, lng):
             return s
         return {'feats': feats, 'green_scorer': green_scorer,
                 'turf': turf, 'turf_r': turf_r, 'arid': arid,
+                'arid_sep': arid_sep,
                 'turf_thr': round(turf_thr, 3),
                 'sand_ok': sand_ok}
     except Exception:

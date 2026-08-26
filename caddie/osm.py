@@ -6,7 +6,7 @@ the free Overpass API (© OpenStreetMap contributors, ODbL — keep the
 attribution line in anything user-facing). Be polite: this module sleeps
 between calls and identifies itself; run big sweeps sharded by market.
 """
-import json, math, time, urllib.request, urllib.parse
+import json, math, os, time, urllib.request, urllib.parse
 
 MIRRORS = [
     'https://overpass-api.de/api/interpreter',
@@ -97,14 +97,70 @@ def overpass(query, mirror=0, timeout=90):
         return json.loads(r.read().decode())
 
 
-def _try_overpass(query, tries=3, base_mirror=0):
+# ---- outage breaker --------------------------------------------------------
+# Overpass fails in two completely different ways and the old ladder treated
+# them identically. A single 504 on a busy minute is worth retrying, because
+# the next try usually works. A sustained outage is not: three tries here
+# inside three attempts in sweep.py made NINE requests per course and 132
+# seconds of sleeping, and every one of those requests was free to hang for
+# the full 90-second timeout, so one dead course could hold a 340-minute lane
+# for a quarter of an hour.
+#
+# None of that time bought anything. A course that errors is written with an
+# empty tiers and no _gen, so the next scheduled run picks it up again for
+# free six hours later, by which time Overpass has usually recovered. Failing
+# fast and moving on loses nothing and asks less of a service we do not pay
+# for. Measured on Aug 25 2026: 137 error rows, roughly seven hours of lane
+# time, spent entirely on courses that could not have succeeded.
+#
+# So: count consecutive failures of the REQUIRED query. Past OVERPASS_TRIP,
+# drop to one try with a short timeout and no backoff, and let sweep.py stop
+# re-attempting the course. Any success anywhere closes the breaker again.
+_OUTAGE = {'streak': 0, 'open': False}
+OVERPASS_TRIP = int(os.environ.get('OVERPASS_TRIP', '5'))
+
+
+def degraded():
+    """True while Overpass looks down rather than merely busy."""
+    return _OUTAGE['open']
+
+
+def _mark(ok):
+    if ok:
+        if _OUTAGE['open']:
+            print('[overpass] answering again — back to full retries', flush=True)
+        _OUTAGE['streak'], _OUTAGE['open'] = 0, False
+        return
+    _OUTAGE['streak'] += 1
+    if not _OUTAGE['open'] and _OUTAGE['streak'] >= OVERPASS_TRIP:
+        _OUTAGE['open'] = True
+        print(f"[overpass] {_OUTAGE['streak']} required queries failed in a row "
+              f"— degraded mode: one try, short timeout, no backoff", flush=True)
+
+
+def _try_overpass(query, tries=3, base_mirror=0, required=True):
+    """required=False marks a best-effort query (fairway, context, hazards):
+    it may still retry, but it never trips the breaker on its own. Those
+    queries can fail for reasons that say nothing about Overpass's health —
+    a dense multi-course site blows the query's memory while the small golf
+    query beside it succeeds. A SUCCESS anywhere always clears the breaker,
+    because that is unambiguous evidence the service is alive."""
+    if degraded():
+        tries = 1
     last = None
     for i in range(tries):
         try:
-            return overpass(query, base_mirror + i)
+            j = overpass(query, base_mirror + i, timeout=25 if degraded() else 90)
+            _mark(True)
+            return j
         except Exception as e:
             last = e
-            time.sleep(6 * (i + 1))
+            if required:
+                _mark(False)
+            # never sleep after the final try — the old ladder slept 18s and
+            # then raised anyway, which is 18s of pure waiting per course
+            if i + 1 < tries:
+                time.sleep(6 * (i + 1))
     raise last
 
 
@@ -145,7 +201,7 @@ def fetch_course(key, name, market, lat, lng, pad=0.020, mirror=0):
     time.sleep(1.0)
     qf = f'[out:json][timeout:60];way["golf"="fairway"]({bb});out geom;'
     try:
-        jf = _try_overpass(qf, tries=2, base_mirror=mirror)
+        jf = _try_overpass(qf, tries=2, base_mirror=mirror, required=False)
         for e in jf.get('elements', []):
             if not e.get('geometry') or len(e['geometry']) < 4:
                 continue
@@ -174,7 +230,7 @@ def fetch_course(key, name, market, lat, lng, pad=0.020, mirror=0):
           f'way["natural"="cliff"]({bc});'
           f');out tags geom;')
     try:
-        jc = _try_overpass(qc, tries=2, base_mirror=mirror)
+        jc = _try_overpass(qc, tries=2, base_mirror=mirror, required=False)
         #   w water   x wood   X tree row   i water that is dry most of the year
         #   C coastline (mean high water)   A sand: beach, dune, waste
         #   M wetland / saltmarsh           L clifftop
@@ -236,7 +292,7 @@ def fetch_course(key, name, market, lat, lng, pad=0.020, mirror=0):
           f'node["natural"="tree"]({bc});'
           f');out geom;')
     try:
-        jh = _try_overpass(qh, tries=2, base_mirror=mirror)
+        jh = _try_overpass(qh, tries=2, base_mirror=mirror, required=False)
         # tree NODES are one coordinate each and are the main way a course's
         # timber gets mapped, so they get a generous cap (GEN 6).
         caps = {'S': 40, 'J': 30, 'r': 40, 'h': 40, 'n': 60, 'p': 80, 'u': 60, 'T': 400}

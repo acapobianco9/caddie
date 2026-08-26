@@ -530,10 +530,31 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
             ground_biome = 'cliff'
             if not cliffs:
                 shore = _resample([tuple(q) for q in best_sc['c']])
-    # Bare ground between the holes is the desert signal, full stop. Requiring
-    # NO water anywhere meant every desert course with an irrigation pond came
-    # back parkland — which was all of them.
-    if ground_biome == 'parkland' and arid is not None and arid >= 0.45:
+    # Bare ground between the holes is EVIDENCE, not a verdict.
+    #
+    # GEN 7 let `arid` promote a hole to desert on its own, and GEN 8 removed
+    # the last thing holding it back (it used to also require no water in
+    # play). Measured across the catalog on Aug 25 2026 that was wrong at
+    # scale: median arid came out 0.609 in Chicago against 0.328 in
+    # Washington, 47% of Chicago first holes were already drawn as desert, and
+    # 9,487 of the 16,014 holes carrying a reading sat above the 0.45 line.
+    # Herndon Centennial, in Virginia, rendered six desert holes — exactly the
+    # six with no water on them. `arid` is computed from absolute NDVI on a
+    # chip the imagery server has already contrast-stretched, so it cannot
+    # tell Illinois from Arizona, and a number that cannot do that has no
+    # business deciding what the ground looks like.
+    #
+    # So the survey decides and the imagery agrees. Desert now needs OSM to
+    # have found arid ground ON THIS HOLE — a dry wash, a dry channel, a scrub
+    # penalty area, or bare sand that is not a beach — AND the chip to read
+    # bare. Checked against live packs: this drops all 13 sampled false
+    # deserts across Chicago, Atlanta and Washington, keeps the Denver hole
+    # that has native ground mapped beside it, and keeps Angeles National,
+    # whose seven scrub penalty areas are exactly this corroboration.
+    dry_ground = bool(drys or drypen or chans
+                      or [f for f in sands if _off_shore(f['g']) >= 120])
+    if (ground_biome == 'parkland' and dry_ground
+            and arid is not None and arid >= 0.45):
         ground_biome = 'desert'
     dunes = (dunes + scarps)[:6] if ground_biome in ('links', 'strand', 'cliff') else []
     # Three grounds ship: parkland, desert, links (Anthony, Aug 25 2026). The
@@ -783,6 +804,8 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
         'dry_penalty': len(drypen),
         'biome': ground_biome,
         'arid': arid,
+        'arid_sep': gnd.get('arid_sep'),
+        'dry_ground': dry_ground,
         'elev_ft': (ep[-1] if (ep := _elev_prof(elev, line_ll, line, total))
                     else _elev_ft(elev, line_ll)),
     }
