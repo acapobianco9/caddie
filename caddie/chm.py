@@ -142,6 +142,76 @@ def chm_chip(lat, lng, pad_m=2000.0):
     raise RuntimeError(f'no canopy tile for {qk} :: ' + ' | '.join(errs))
 
 
+# ---------------------------------------------------------------- masks
+
+ROUGH_M = 1.0       # local height spread that separates a crown from a roof
+ROUGH_K = 7         # window, px (~7 m)
+
+
+def _boxsum(a, k):
+    """Summed-area box filter -- O(1) per pixel regardless of window."""
+    import numpy as np
+    c = np.cumsum(np.cumsum(np.pad(a, ((1, 0), (1, 0))), 0), 1)
+    p = k // 2
+    c = np.pad(c, ((p, p + 1), (p, p + 1)), mode='edge')
+    H, W = a.shape
+    return c[k:k+H, k:k+W] - c[0:H, k:k+W] - c[k:k+H, 0:W] + c[0:H, 0:W]
+
+
+def masked_rough(h, tall, k=ROUGH_K):
+    """Local height spread computed over TALL pixels only.
+
+    A building is flat on top and a tree crown is not, so height roughness
+    separates them -- but only if the window ignores the ground. Measured
+    naively, a roof's EDGE is the roughest thing on the chip (a twelve-metre
+    step in one pixel) and a third of every roof survives. Masking the window
+    to tall pixels means an edge pixel sees roof, not the drop: on a synthetic
+    scene of crowns and slabs this keeps 100% of canopy and 2.5% of roofs.
+    """
+    import numpy as np
+    m = tall.astype('float64')
+    hm = np.nan_to_num(h, nan=0.0) * m
+    n = np.maximum(_boxsum(m, k), 1.0)
+    s1 = _boxsum(hm, k)
+    s2 = _boxsum(hm * hm, k)
+    return np.sqrt(np.maximum(s2 / n - (s1 / n) ** 2, 0.0))
+
+
+def tree_masks(hgt):
+    """-> {'raw': tall, 'flat': tall minus flat-topped ground}, plus stats."""
+    import numpy as np
+    tall = np.isfinite(hgt) & (hgt >= TREE_M)
+    rough = masked_rough(hgt, tall)
+    flat = tall & (rough >= ROUGH_M)
+    dropped = tall & ~flat
+    return ({'raw': tall, 'flat': flat},
+            {'tall_px': int(tall.sum()), 'flat_px': int(flat.sum()),
+             'dropped_px': int(dropped.sum()),
+             'dropped_pct': (round(100.0 * float(dropped.sum()) / max(1, int(tall.sum())), 1))},
+            dropped)
+
+
+def building_raster(buildings_ll, to_px, shape):
+    """OSM building footprints burned into the chip grid, for validation.
+
+    osm.py caps buildings at 60 per course, so this can only ever be a
+    partial reference -- it is here to check that what the roughness filter
+    drops really is buildings, not to do the dropping.
+    """
+    import numpy as np
+    from PIL import Image, ImageDraw
+    H, W = shape
+    im = Image.new('1', (W, H), 0)
+    d = ImageDraw.Draw(im)
+    n = 0
+    for g in buildings_ll:
+        pts = [to_px(p[0], p[1]) for p in g]
+        if len(pts) >= 3:
+            d.polygon([(float(x), float(y)) for x, y in pts], fill=1)
+            n += 1
+    return np.array(im, dtype=bool), n
+
+
 # ---------------------------------------------------------------- geometry
 
 def project_yd(pts_ll, lat0, lon0):
@@ -149,7 +219,7 @@ def project_yd(pts_ll, lat0, lon0):
     return [((p[1] - lon0) * k, -(p[0] - lat0) * 121740.0) for p in pts_ll]
 
 
-def wood_gap(hgt, to_px, m_per_px, line_ll, lat0, lon0):
+def wood_gap(mask, to_px, line_ll, lat0, lon0):
     """For each hole: how far off the line, each side, does timber start?
 
     The same question generate.PROBES asks of OSM, asked of the height model
@@ -182,10 +252,9 @@ def wood_gap(hgt, to_px, m_per_px, line_ll, lat0, lon0):
         la, lo = yd_to_ll(x, y)
         c, r = to_px(la, lo)
         c, r = int(round(c)), int(round(r))
-        if not (0 <= r < hgt.shape[0] and 0 <= c < hgt.shape[1]):
+        if not (0 <= r < mask.shape[0] and 0 <= c < mask.shape[1]):
             return None
-        v = hgt[r, c]
-        return None if (v != v) else bool(v >= TREE_M)
+        return bool(mask[r, c])
 
     firsts = {-1: None, 1: None}
     chute = 0
@@ -224,20 +293,19 @@ def wood_gap(hgt, to_px, m_per_px, line_ll, lat0, lon0):
 
 # ---------------------------------------------------------------- output
 
-def mask_png(hgt, lo=TREE_M):
-    """The tall-pixel mask as a transparent PNG data URI.
+def mask_png(hgt, tall):
+    """A tree mask as a transparent PNG data URI.
 
-    A 2.6km chip at 1m is nearly seven million pixels; drawing them as SVG
-    rectangles would be absurd. An image is exact and small.
+    A 4km chip at 1m is sixteen million pixels; drawing them as SVG rectangles
+    would be absurd. An image is exact and small.
     """
     import base64, io
     import numpy as np
     from PIL import Image
     h = np.nan_to_num(hgt, nan=0.0)
-    tall = h >= lo
     rgba = np.zeros(h.shape + (4,), dtype='uint8')
     # ramp the green with height so a hedge and an oak do not look alike
-    k = np.clip((h - lo) / 22.0, 0, 1)
+    k = np.clip((h - TREE_M) / 22.0, 0, 1)
     rgba[..., 0] = (20 + 20 * (1 - k)).astype('uint8')
     rgba[..., 1] = (90 + 70 * (1 - k)).astype('uint8')
     rgba[..., 2] = (40 + 30 * (1 - k)).astype('uint8')
@@ -273,6 +341,7 @@ figure{margin:0}
 
 def one(key):
     import osm
+    from generate import _match_course_holes
     q = urllib.parse.quote(key, safe='')
     course = (_get(f'courses?select=key,name,info,market_key&key=eq.{q}') or [{}])[0]
     if not course:
@@ -284,43 +353,69 @@ def one(key):
     name = course.get('name') or key
 
     hgt, to_px, meta = chm_chip(lat, lng)
-    print(f'[{key}] {meta}', flush=True)
+    masks, mstat, dropped = tree_masks(hgt)
+    print(f'[{key}] {meta} {mstat}', flush=True)
 
     feats = osm.fetch_course(key, name, course.get('market_key') or '', lat, lng)
-    holes = (feats or {}).get('h') or []
-    rows = []
-    for h in holes:
-        ll = h.get('l') or []
-        if len(ll) < 2:
-            continue
-        g = wood_gap(hgt, to_px, meta['m_per_px'], ll, ll[0][0], ll[0][1])
-        if not g:
-            continue
-        g['ref'] = str(h.get('r') or '?')
-        rows.append(g)
-    rows.sort(key=lambda r: (len(r['ref']), r['ref']))
+    # Same hole filter build_course uses. Without it a course inherits its
+    # neighbours' holes: Bobby Jones, a nine, came back with 32.
+    raw_holes = [h for h in (feats or {}).get('h') or []
+                 if str(h.get('r', '')).isdigit()]
+    holes = _match_course_holes(raw_holes, name)
+    holes.sort(key=lambda h: int(h['r']))
 
+    bld = [g for t, g in ((feats or {}).get('f') or []) if t == 'u']
+    braster, nb = building_raster(bld, to_px, hgt.shape)
     import numpy as np
+    hit = int((dropped & braster).sum())
+    mstat['osm_buildings'] = nb
+    mstat['dropped_on_osm_building_pct'] = (
+        round(100.0 * hit / max(1, mstat['dropped_px']), 1) if nb else None)
+    mstat['osm_building_px_dropped_pct'] = (
+        round(100.0 * hit / max(1, int((braster & masks['raw']).sum())), 1) if nb else None)
+
+    out = {}
+    for tag, m in masks.items():
+        rows = []
+        for h in holes:
+            ll = h.get('l') or []
+            if len(ll) < 2:
+                continue
+            g = wood_gap(m, to_px, ll, ll[0][0], ll[0][1])
+            if not g:
+                continue
+            g['ref'] = str(h.get('r') or '?')
+            rows.append(g)
+        rows.sort(key=lambda r: (len(r['ref']), r['ref']))
+        out[tag] = rows
+
+    def summ(rows):
+        if not rows:
+            return {'holes': 0, 'timber': 0, 'both': 0, 'chute': None}
+        return {'holes': len(rows),
+                'timber': sum(1 for r in rows
+                              if r['left'] is not None or r['right'] is not None),
+                'both': sum(1 for r in rows
+                            if r['left'] is not None and r['right'] is not None),
+                'chute': sorted(r['chute_pct'] for r in rows)[len(rows) // 2]}
+
     finite = hgt[np.isfinite(hgt)]
-    tall_pct = round(100.0 * float((finite >= TREE_M).mean()), 1) if finite.size else None
-    both = [r for r in rows if r['left'] is not None and r['right'] is not None]
     row = {'key': key, 'name': name, 'lat': lat, 'lng': lng,
            'source': meta['source'], 'm_per_px': meta['m_per_px'],
-           'crs': meta['crs'], 'affine_err_m': meta.get('affine_err_m'),
-           'holes': len(rows), 'tall_pct': tall_pct,
-           'holes_with_timber': sum(1 for r in rows
-                                    if r['left'] is not None or r['right'] is not None),
-           'holes_both_sides': len(both),
-           'median_chute': (sorted(r['chute_pct'] for r in rows)[len(rows)//2]
-                            if rows else None)}
-    write_page(key, name, lat, lng, hgt, to_px, meta, holes, rows, row)
-    print(f'  {key:<40} {row["holes_with_timber"]}/{row["holes"]} holes have timber, '
-          f'{row["holes_both_sides"]} both sides, median chute {row["median_chute"]}%',
+           'affine_err_m': meta.get('affine_err_m'),
+           'tall_pct': round(100.0 * float((finite >= TREE_M).mean()), 1) if finite.size else None,
+           'raw': summ(out['raw']), 'flat': summ(out['flat'])}
+    row.update({k: v for k, v in mstat.items() if k != 'tall_px'})
+    write_page(key, name, lat, lng, hgt, to_px, meta, holes, out, row, masks, mstat)
+    print(f'  {key:<40} raw chute {row["raw"]["chute"]}%  ->  flat chute '
+          f'{row["flat"]["chute"]}%   (dropped {mstat["dropped_pct"]}% of tall px, '
+          f'{mstat["dropped_on_osm_building_pct"]}% of those on an OSM building)',
           flush=True)
     return row
 
 
-def write_page(key, name, lat, lng, hgt, to_px, meta, holes, rows, summary):
+def write_page(key, name, lat, lng, hgt, to_px, meta, holes, out, summary,
+               masks, mstat):
     import naip
     pad_m = 2000.0
     dlat = pad_m / 110540.0
@@ -337,53 +432,71 @@ def write_page(key, name, lat, lng, hgt, to_px, meta, holes, rows, summary):
     paths = []
     for h in holes:
         ll = h.get('l') or []
-        if len(ll) < 2:
-            continue
-        pts = ' '.join(f'{x:.1f},{y:.1f}' for x, y in (vb(p[0], p[1]) for p in ll))
-        paths.append(f'<polyline class="hl" points="{pts}"/>')
+        if len(ll) >= 2:
+            pts = ' '.join(f'{x:.1f},{y:.1f}'
+                           for x, y in (vb(p[0], p[1]) for p in ll))
+            paths.append(f'<polyline class="hl" points="{pts}"/>')
     lines = ''.join(paths)
-    png = mask_png(hgt)
 
-    trs = ''.join(
-        f'<tr class="{"chute" if r["chute_pct"] >= 60 else ""}">'
+    panes = []
+    for tag, cap in (('raw', 'everything over 3 m'),
+                     ('flat', 'flat-topped ground removed')):
+        panes.append(
+            f'<figure><figcaption>{cap}</figcaption><div class="stage">'
+            f'<img src="{aer}" alt=""><img class="m" src="{mask_png(hgt, masks[tag])}" alt="">'
+            f'<svg viewBox="0 0 1000 1000">{lines}</svg></div></figure>')
+
+    def table(rows):
+        return ''.join(
+            f'<tr class="{"chute" if r["chute_pct"] >= 60 else ""}">'
+            f'<td>{r["ref"]}</td><td class="n">{r["total"]}</td>'
+            f'<td class="n">{"&mdash;" if r["left"] is None else int(r["left"])}</td>'
+            f'<td class="n">{"&mdash;" if r["right"] is None else int(r["right"])}</td>'
+            f'<td class="n">{r["chute_pct"]}%</td></tr>' for r in rows)
+
+    byref = {r['ref']: r for r in out['flat']}
+    both = ''.join(
+        f'<tr class="{"chute" if byref.get(r["ref"], r)["chute_pct"] >= 60 else ""}">'
         f'<td>{r["ref"]}</td><td class="n">{r["total"]}</td>'
-        f'<td class="n">{"&mdash;" if r["left"] is None else int(r["left"])}</td>'
-        f'<td class="n">{"&mdash;" if r["right"] is None else int(r["right"])}</td>'
-        f'<td class="n">{r["chute_pct"]}%</td></tr>' for r in rows)
+        f'<td class="n">{r["chute_pct"]}%</td>'
+        f'<td class="n">{byref.get(r["ref"], {}).get("chute_pct", "&mdash;")}%</td>'
+        f'<td class="n">{"&mdash;" if byref.get(r["ref"], {}).get("left") is None else int(byref[r["ref"]]["left"])}</td>'
+        f'<td class="n">{"&mdash;" if byref.get(r["ref"], {}).get("right") is None else int(byref[r["ref"]]["right"])}</td>'
+        f'</tr>' for r in out['raw'])
 
     html = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
-            f'<title>Canopy height &mdash; {name}</title>'
+            f'<title>Tree cover &mdash; {name}</title>'
             '<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600'
             '&family=Archivo:wght@400;600&display=swap" rel="stylesheet">'
             f'<style>{PAGE_CSS}</style></head><body><div class="wrap">'
-            f'<h1>Canopy height &mdash; {name}</h1>'
-            f'<p class="dek">Measured tree height over the course, from the WRI/Meta model '
-            f'({meta["source"]}, {meta["m_per_px"]} m/px, {meta["crs"]}). Green is ground '
-            f'standing {TREE_M:g} m or taller, darker with height. Yellow is the surveyed '
-            f'playing line. Everything on this page is measured &mdash; the question is '
-            f'whether the timber sits where the aerial says it does, and whether the corridor '
-            f'it leaves matches the hole.</p>'
-            f'<table><tbody>'
-            f'<tr><th>Chip</th><td class="n">{meta["window_px"][0]}&times;{meta["window_px"][1]} px</td></tr>'
+            f'<h1>Tree cover &mdash; {name}</h1>'
+            f'<p class="dek">Measured tree height from the WRI/Meta model '
+            f'({meta["source"]}, {meta["m_per_px"]} m/px). A building is as tall as an '
+            f'oak and reads the same to a height model, so the right pane drops ground '
+            f'whose top is flat: local height spread under {ROUGH_M:g} m across a '
+            f'{ROUGH_K}-pixel window, measured over tall pixels only so a roof edge sees '
+            f'roof rather than the drop to the ground. The number that matters is whether '
+            f'the chute figures survive that filter &mdash; if they collapse, we were '
+            f'drawing houses.</p>'
+            '<table><tbody>'
             f'<tr><th>Ground over {TREE_M:g}m</th><td class="n">{summary["tall_pct"]}%</td></tr>'
-            f'<tr><th>Holes with timber</th><td class="n">{summary["holes_with_timber"]} / {summary["holes"]}</td></tr>'
-            f'<tr><th>Timber both sides</th><td class="n">{summary["holes_both_sides"]}</td></tr>'
-            f'<tr><th>Median chute</th><td class="n">{summary["median_chute"]}%</td></tr>'
+            f'<tr><th>Dropped as flat-topped</th><td class="n">{mstat["dropped_pct"]}% of tall pixels</td></tr>'
+            f'<tr><th>&hellip; of which on an OSM building</th><td class="n">{mstat["dropped_on_osm_building_pct"]}%</td></tr>'
+            f'<tr><th>OSM building pixels dropped</th><td class="n">{mstat["osm_building_px_dropped_pct"]}% (of {mstat["osm_buildings"]} mapped)</td></tr>'
+            f'<tr><th>Median chute</th><td class="n">{summary["raw"]["chute"]}% &rarr; '
+            f'<b>{summary["flat"]["chute"]}%</b></td></tr>'
+            f'<tr><th>Holes</th><td class="n">{summary["flat"]["holes"]}</td></tr>'
             f'<tr><th>Affine error</th><td class="n">{meta.get("affine_err_m")} m</td></tr>'
-            f'</tbody></table>'
-            '<div class="pair">'
-            f'<figure><figcaption>aerial</figcaption><div class="stage">'
-            f'<img src="{aer}" alt=""><svg viewBox="0 0 1000 1000">{lines}</svg></div></figure>'
-            f'<figure><figcaption>canopy height over the aerial</figcaption><div class="stage">'
-            f'<img src="{aer}" alt=""><img class="m" src="{png}" alt="">'
-            f'<svg viewBox="0 0 1000 1000">{lines}</svg></div></figure></div>'
+            '</tbody></table>'
+            f'<div class="pair">{"".join(panes)}</div>'
             '<h1 style="font-size:20px;margin:32px 0 8px">Per hole</h1>'
-            '<p class="dek">First timber, in yards off the playing line, each side. '
-            '&ldquo;Chute&rdquo; is the share of the walk with timber inside 60 yards on '
-            '<em>both</em> sides &mdash; the number that says how the hole plays.</p>'
-            '<table><thead><tr><th>Hole</th><th>Yards</th><th>Left</th><th>Right</th>'
-            f'<th>Chute</th></tr></thead><tbody>{trs}</tbody></table>'
+            '<p class="dek">Chute is the share of the walk with timber inside 60 yards on '
+            '<em>both</em> sides. Left and right are first timber in yards, after the '
+            'flat-topped filter.</p>'
+            '<table><thead><tr><th>Hole</th><th>Yards</th><th>Chute raw</th>'
+            '<th>Chute filtered</th><th>Left</th><th>Right</th></tr></thead>'
+            f'<tbody>{both}</tbody></table>'
             '</div></body></html>')
     os.makedirs(os.path.join(ROOT, 'demo'), exist_ok=True)
     open(os.path.join(ROOT, 'demo', f'chm_{key}.html'), 'w').write(html)
@@ -403,30 +516,42 @@ def main():
     good = [r for r in rows if not r.get('error')]
     if not good:
         sys.exit('every course failed')
+
+    def cell(v, s='%'):
+        return '&mdash;' if v is None else f'{v}{s}'
     trs = ''.join(
-        (f'<tr><td>{r["key"]}</td><td colspan="7">{r["error"]}</td></tr>'
+        (f'<tr><td>{r["key"]}</td><td colspan="8">{r["error"]}</td></tr>'
          if r.get('error') else
          f'<tr><td><a href="chm_{r["key"]}.html">{r["name"]}</a></td>'
-         f'<td class="n">{r["source"]}</td><td class="n">{r["m_per_px"]}</td>'
-         f'<td class="n">{r["tall_pct"]}%</td>'
-         f'<td class="n">{r["holes_with_timber"]} / {r["holes"]}</td>'
-         f'<td class="n">{r["holes_both_sides"]}</td>'
-         f'<td class="n">{r["median_chute"]}%</td>'
-         f'<td class="n">{r["affine_err_m"]}</td></tr>')
+         f'<td class="n">{r["m_per_px"]}</td>'
+         f'<td class="n">{cell(r["tall_pct"])}</td>'
+         f'<td class="n">{r["flat"]["holes"]}</td>'
+         f'<td class="n">{r["flat"]["timber"]}</td>'
+         f'<td class="n">{r["flat"]["both"]}</td>'
+         f'<td class="n">{cell(r["raw"]["chute"])}</td>'
+         f'<td class="n"><b>{cell(r["flat"]["chute"])}</b></td>'
+         f'<td class="n">{cell(r["dropped_pct"])}</td>'
+         f'<td class="n">{cell(r["dropped_on_osm_building_pct"])}</td></tr>')
         for r in rows)
     html = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            '<title>Canopy height review</title>'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<title>Tree cover review</title>'
             '<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600'
             '&family=Archivo:wght@400;600&display=swap" rel="stylesheet">'
             f'<style>{PAGE_CSS}</style></head><body><div class="wrap">'
-            '<h1>Canopy height review</h1>'
-            '<p class="dek">Measured tree height per course. <b>Holes with timber</b> is the '
-            'number OSM could not answer at all &mdash; it had nothing within 200 yards of the '
-            'line on 12 of 14 Bobby Jones holes and nothing whatsoever at Idyl Wyld.</p>'
-            '<table><thead><tr><th>Course</th><th>Src</th><th>m/px</th><th>Over 3m</th>'
-            '<th>Holes w/ timber</th><th>Both sides</th><th>Median chute</th>'
-            f'<th>Affine err</th></tr></thead><tbody>{trs}</tbody></table>'
-            '</div></body></html>')
+            '<h1>Tree cover review</h1>'
+            '<p class="dek">Measured canopy height per course, before and after dropping '
+            'flat-topped ground. <b>Chute</b> is the share of the median hole with timber '
+            'inside 60 yards on both sides &mdash; the number that says whether a hole plays '
+            'as a corridor. The pair to read is <b>raw</b> against <b>filtered</b>: if a '
+            'course collapses, its trees were roofs. <b>On OSM bldg</b> is the share of '
+            'dropped pixels that land on a mapped building footprint, which is the check '
+            'that the filter is removing what we think it is &mdash; partial only, because '
+            'osm.py caps buildings at 60 a course.</p>'
+            '<table><thead><tr><th>Course</th><th>m/px</th><th>Over 3m</th><th>Holes</th>'
+            '<th>Timber</th><th>Both</th><th>Chute raw</th><th>Chute filtered</th>'
+            '<th>Dropped</th><th>On OSM bldg</th></tr></thead>'
+            f'<tbody>{trs}</tbody></table></div></body></html>')
     os.makedirs(os.path.join(ROOT, 'demo'), exist_ok=True)
     open(os.path.join(ROOT, 'demo', 'chm_index.html'), 'w').write(html)
     print(f'wrote demo/chm_index.html ({len(good)} of {len(rows)} ok)', flush=True)
