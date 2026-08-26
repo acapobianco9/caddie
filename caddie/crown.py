@@ -204,6 +204,54 @@ def tuft_svg(x, y, s, cls, kind='fan'):
 BIOMES = ('parkland', 'desert', 'links', 'strand', 'cliff', 'marsh')
 
 
+
+def _clip_rect(poly, w, h):
+    """Sutherland-Hodgman clip of a polygon to the card rectangle."""
+    def inside(p, e):
+        if e == 0: return p[0] >= 0
+        if e == 1: return p[0] <= w
+        if e == 2: return p[1] >= 0
+        return p[1] <= h
+
+    def cut(a, b, e):
+        ax, ay = a; bx, by = b
+        if e in (0, 1):
+            x = 0.0 if e == 0 else float(w)
+            t = (x - ax) / ((bx - ax) or 1e-9)
+            return (x, ay + t * (by - ay))
+        y = 0.0 if e == 2 else float(h)
+        t = (y - ay) / ((by - ay) or 1e-9)
+        return (ax + t * (bx - ax), y)
+
+    out = list(poly)
+    for e in range(4):
+        if not out:
+            return []
+        src, out = out, []
+        prev = src[-1]
+        for cur in src:
+            if inside(cur, e):
+                if not inside(prev, e):
+                    out.append(cut(prev, cur, e))
+                out.append(cur)
+            elif inside(prev, e):
+                out.append(cut(prev, cur, e))
+            prev = cur
+    return out
+
+
+def _card_fraction(P, w, h):
+    """What share of the card does this polygon actually paint? 0..1."""
+    C = _clip_rect(P, w, h)
+    if len(C) < 3:
+        return 0.0
+    a = 0.0
+    for i in range(len(C)):
+        x0, y0 = C[i]; x1, y1 = C[(i + 1) % len(C)]
+        a += x0 * y1 - x1 * y0
+    return abs(a) / 2.0 / float(w * h)
+
+
 def ground_svg(p, PX, line, total, sc, hid, VW, VH):
     """Everything under the corridor. Returns (svg_parts, css_parts)."""
     biome = p.get('biome') or 'parkland'
@@ -596,16 +644,21 @@ def render_hole(p, course_name, market=''):
         wpx.append(P)
         ext = max(max(q[0] for q in wply) - min(q[0] for q in wply),
                   max(q[1] for q in wply) - min(q[1] for q in wply))
-        # A hazard is a thing you can see the far side of, and that is an
-        # ABSOLUTE fact about the water, not a ratio against the hole. The old
-        # `ext > total * 1.15` let a 512-yard lake on a 500-yard hole fill in
-        # straight across the corridor; scaling the ratio down instead broke
-        # the opposite end, demoting the 93-yard pond in front of a 107-yard
-        # par 3 - which is the entire hole. Measured on 1,657 GEN 9 water
-        # polygons (median 144 yd, p90 424 yd): a flat 260-yard cap leaves
-        # every pond under 260 filled, including 184 of the 229 short-par-3
-        # waters, and catches all 108 polygons the ratio rule was flooding.
-        oversize.append(ext > 260)
+        card_frac = _card_fraction(P, VW, VH)
+        # SIZE IS THE WRONG QUESTION. Checked against NAIP aerials: of the
+        # oversize polygons a 260-yard cap demoted, 84% come within 40 yards
+        # of the playing line and the median sits 11 yards off it. At Doral
+        # Red Tiger the "1,194-yard lake" is one real lobed lake the course is
+        # built around, and its edge runs down the fairway. Water that close is
+        # the most important thing on the card; drawing it as a faint outline
+        # loses the hole. The card already clips -- water is not in the frame
+        # fit -- so a big lake simply fills the part of the page it genuinely
+        # occupies, which is correct.
+        #
+        # The only true failure is a body that covers the WHOLE card, leaving
+        # no legible corridor underneath. So measure exactly that: the share of
+        # the card the polygon actually paints, clipped to the card.
+        oversize.append(card_frac > 0.55)
 
     for P, big in zip(wpx, oversize):
         dw = catmull(P, True)
