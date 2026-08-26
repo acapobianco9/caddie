@@ -52,6 +52,12 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           SURVEY_SLEEP: "1.6"
         run: |
+          # pipefail matters: without it the pipeline reports TEE's exit status,
+          # not python's, so a crashed script — or a missing one — finishes in
+          # zero seconds and paints the step green. That happened on run #1.
+          set -euo pipefail
+          test -f caddie/survey_none.py \
+            || { echo "caddie/survey_none.py is not in the repo"; exit 1; }
           if [ "${{ inputs.sample }}" = "0" ]; then
             python caddie/survey_none.py --all | tee survey.txt
           else
@@ -69,6 +75,9 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
+          set -uo pipefail   # not -e: a non-zero exit here is a finding, not a failure
+          test -f caddie/verify_locations.py \
+            || { echo "caddie/verify_locations.py is not in the repo"; exit 1; }
           if [ "${{ inputs.scope }}" = "--all" ]; then
             python caddie/verify_locations.py --all | tee locations.txt
           else
