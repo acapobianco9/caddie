@@ -1,0 +1,51 @@
+name: caddie-chm
+
+# Reads the WRI/Meta canopy height model over a course and writes a page
+# showing measured tree height against the aerial and the playing lines.
+# The tiles are public cloud-optimised GeoTIFFs, so only the window over the
+# course is transferred, not the whole 32km tile.
+
+on:
+  workflow_dispatch:
+    inputs:
+      course:
+        description: "course_key, or several separated by commas"
+        required: true
+
+jobs:
+  chm:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Raster deps
+        run: pip install rasterio numpy pillow
+
+      - name: Read canopy height
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          COURSE: ${{ github.event.inputs.course }}
+          GDAL_DISABLE_READDIR_ON_OPEN: EMPTY_DIR
+          CPL_VSIL_CURL_ALLOWED_EXTENSIONS: .tif
+          AWS_NO_SIGN_REQUEST: YES
+        run: |
+          set -euo pipefail
+          test -f caddie/chm.py
+          python caddie/chm.py "$COURSE"
+          test -s demo/chm_index.html
+
+      - name: Commit the pages
+        run: |
+          set -euo pipefail
+          git config user.name "caddie-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add demo/
+          git commit -m "chm: canopy height pages" || echo "nothing to commit"
+          git push
