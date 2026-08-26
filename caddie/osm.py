@@ -295,7 +295,11 @@ def fetch_course(key, name, market, lat, lng, pad=0.020, mirror=0):
         jh = _try_overpass(qh, tries=2, base_mirror=mirror, required=False)
         # tree NODES are one coordinate each and are the main way a course's
         # timber gets mapped, so they get a generous cap (GEN 6).
-        caps = {'S': 40, 'J': 30, 'r': 40, 'h': 40, 'n': 60, 'p': 80, 'u': 60, 'T': 400}
+        # buildings were capped at 60, which was fine while they were only
+        # scenery. GEN 10 subtracts them from the canopy height model, where
+        # 60 footprints over a subdivision course leaves most of the roofs
+        # still reading as timber, so the cap is now generous.
+        caps = {'S': 40, 'J': 30, 'r': 40, 'h': 40, 'n': 60, 'p': 80, 'u': 1200, 'T': 400}
         cnt = {k: 0 for k in caps}
         for e in jh.get('elements', []):
             tags = e.get('tags', {}) or {}
