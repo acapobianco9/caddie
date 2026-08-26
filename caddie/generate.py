@@ -20,7 +20,7 @@ hole playing "up" = negative y, matching the phone rendering):
     {"hole","par","tier","yards":{front,mid,back,total},"has_green",
      "line","green","bunkers","waters","tees","woods_used",
      "carries":[{"kind","at"}],"bend":{"at","dir"}|null,
-     "stands":[{"side","a0","a1","count"}],"read","sign"}
+     "stands":[{"side","a0","a1","count","d"}],"read","sign"}
 
 Tiers: A green+extras · B green only · C centerline only.
 """
@@ -275,7 +275,8 @@ def _miss_cone(arc, total):
     return 45.0
 
 
-def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=None):
+def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None,
+               ground=None, canopy=None):
     line_ll = hole['l']
     if len(line_ll) < 2:
         return None
@@ -283,6 +284,18 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
     line = project(line_ll, lat0, lon0)
     ang = -math.atan2(line[-1][0] - line[0][0], -(line[-1][1] - line[0][1]))
     line = rot(line, ang)
+
+    # The exact inverse of project() then rot(), so a point in the hole's
+    # local yard frame can be handed to a raster that speaks lat/lon. GEN 10
+    # asks the canopy height model on the order of twenty thousand times per
+    # course, so this stays arithmetic instead of a projection call.
+    _rc, _rs = math.cos(ang), math.sin(ang)
+    _rk = math.cos(math.radians(lat0)) * YD_LAT
+
+    def _ll(q):
+        x = q[0] * _rc + q[1] * _rs
+        y = -q[0] * _rs + q[1] * _rc
+        return (lat0 - y / YD_LAT, lon0 + x / _rk)
     total = arclen(line)
     if total < 60 or total > 750:      # not a golf hole
         return None
@@ -671,11 +684,19 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
     carries.sort(key=lambda c: c['at'])
 
     # conifer stands: timber that can actually catch a shot. DETECTED ONLY —
-    # a hole with no mapped woodland gets no trees at all, because inventing a
-    # treeline is the same sin as inventing a bunker (owner call, Aug 24 2026).
-    # The old dogleg fallback ("if it bends, put three trees on the inside")
-    # is gone; so is the unconditional par-3 backdrop ring.
-    PROBES = (14.0, 22.0, 30.0, 38.0, 46.0, 55.0)
+    # a hole with no measured or mapped timber gets no trees at all, because
+    # inventing a treeline is the same sin as inventing a bunker (owner call,
+    # Aug 24 2026). The old dogleg fallback ("if it bends, put three trees on
+    # the inside") is gone; so is the unconditional par-3 backdrop ring.
+    #
+    # GEN 10 changes where the answer comes from, not the rule. OSM timber is
+    # volunteered and patchy: Idyl Wyld has none mapped at all, and Bobby
+    # Jones's nearest wood polygon is a median 567 yards from its own holes.
+    # The canopy height model is a measurement at about a metre a pixel, so
+    # it is asked first, and OSM answers only where the raster does not
+    # reach. Nothing is invented either way — one survey simply has better
+    # coverage than the other.
+    PROBES = (10.0, 15.0, 20.0, 26.0, 32.0, 38.0, 45.0, 55.0, 65.0)
 
     def _dir(a):
         cum = 0.0
@@ -699,7 +720,16 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
 
         A lone tree does not make a stand — it draws as a specimen tree if it
         is in the way. Two within 16 yards of the same spot is a treeline.
+
+        GEN 10, Aug 26 2026. The measured canopy answers first. It returns
+        None where the raster does not cover the point, and None is not
+        False: an unmeasured point falls through to the OSM shapes below
+        rather than being reported as open ground.
         """
+        if canopy is not None:
+            t = canopy.tall(*_ll(q))
+            if t is not None:
+                return t
         if any(pip(q, wp) for wp in wds):
             return True
         for tr in trows:
@@ -726,11 +756,13 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
         return None
 
     stands = []
+    gaps = {-1: [], 1: []}      # (arc, first-timber yards or None) per side
     for side in (-1, 1):
         runs, run = [], None
         a = 40.0
         while a < total - 12:
             gap = _wood_gap(a, side)
+            gaps[side].append((a, gap))
             if gap is not None and gap <= _miss_cone(a, total):
                 run = [run[0], a] if run else [a, a]
             else:
@@ -742,8 +774,33 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
             runs.append(run)
         # capped per side, not per hole: a tree-lined hole is lined on both
         for r in sorted(runs, key=lambda r: -(r[1] - r[0]))[:2]:
+            inside = sorted(g for a2, g in gaps[side]
+                            if g is not None and r[0] <= a2 <= r[1])
             stands.append({'side': side, 'a0': round(r[0]), 'a1': round(r[1]),
-                           'count': max(2, min(6, int((r[1] - r[0]) / 45)))})
+                           'count': max(2, min(6, int((r[1] - r[0]) / 45))),
+                           'd': int(round(inside[len(inside) // 2])) if inside else None})
+
+    # How much of the walk is a chute, and how close the timber really is.
+    # Both sides are probed on the same arc grid, so they pair off by index.
+    _pairs = list(zip(gaps[-1], gaps[1]))
+    _chute = sum(1 for (_, gl), (_, gr) in _pairs
+                 if gl is not None and gr is not None and gl <= 60 and gr <= 60)
+    chute_pct = round(100.0 * _chute / len(_pairs)) if _pairs else 0
+    timber = {k: min((g for _, g in gaps[s] if g is not None), default=None)
+              for k, s in (('left', -1), ('right', 1))}
+    # One side squeezed and the other open is a different hole from a chute,
+    # and it is the more common one. Needs a real difference, not a yard.
+    _tl, _tr = timber['left'], timber['right']
+    tree_side = None
+    if stands and chute_pct < 55:
+        if _tl is not None and _tl <= 30 and (_tr is None or _tr - _tl >= 20):
+            tree_side = 'left'
+        elif _tr is not None and _tr <= 30 and (_tl is None or _tl - _tr >= 20):
+            tree_side = 'right'
+    # Whether the height model actually covered this hole. Without it a card
+    # with no trees cannot be told apart from a card nobody measured.
+    timber_measured = (canopy is not None and
+                       canopy.tall(*_ll(point_at_arc(line, total * 0.5))) is not None)
 
     # backdrop ring behind a green, only where timber is really behind it
     if has_green and not stands:
@@ -852,6 +909,15 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
         'gside_sand': _sd(gsb_best['g'], gsb_best['near']) if gsb_best else None,
         'sand_count': len(bunkers),
         'stands': bool(stands),
+        # GEN 10, measured tree cover. `chute_pct` is the share of the walk
+        # with timber inside 60 yards on BOTH sides — the number that says
+        # whether a hole plays as a corridor. `timber_measured` records
+        # whether the height model covered the hole at all, so a treeless
+        # card reads as "none there" rather than "nobody looked".
+        'chute_pct': chute_pct,
+        'timber': timber,
+        'tree_side': tree_side,
+        'timber_measured': timber_measured,
         'water_is_river': any((w['far'] - w['near']) > 150 for w in wlike),
         'fw_start': fw_start,
         'naip_sand': naip_sand,
@@ -925,7 +991,8 @@ def _cll(poly):
     return (sum(p[0] for p in poly) / len(poly), sum(p[1] for p in poly) / len(poly))
 
 
-def _synthesize(packs, holes, feats, woods, green_scorer=None, ground=None):
+def _synthesize(packs, holes, feats, woods, green_scorer=None, ground=None,
+                canopy=None):
     """The green synthesizer — stops partial courses two ways, honestly.
 
     A) CLAIM: a hole line exists but no green passed the filter. If an unused
@@ -956,7 +1023,8 @@ def _synthesize(packs, holes, feats, woods, green_scorer=None, ground=None):
         if not cands:
             continue
         g = min(cands, key=lambda g: _ydist(end, _cll(g)))
-        p2 = build_hole(h, feats, woods, claim_green=g, ground=ground)
+        p2 = build_hole(h, feats, woods, claim_green=g, ground=ground,
+                        canopy=canopy)
         if p2 and p2['has_green']:
             used |= p2.pop('_srcs', set())
             p2['claimed'] = True
@@ -1045,7 +1113,7 @@ def _synthesize(packs, holes, feats, woods, green_scorer=None, ground=None):
         if r in taken_r or id(g) in taken_f or id(t) in taken_f:
             continue
         p = build_hole({'r': str(r), 'p': '', 'l': [list(tc), list(gc)]},
-                       feats, woods, ground=ground)
+                       feats, woods, ground=ground, canopy=canopy)
         if not p or not p['has_green']:
             continue
         p.pop('_srcs', None)
@@ -1084,13 +1152,16 @@ def _match_course_holes(holes, course_name):
     return out
 
 
-def build_course(data, green_scorer=None, elev=None, ground=None):
+def build_course(data, green_scorer=None, elev=None, ground=None, canopy=None):
     """data = the pack format from osm.py. Returns (packs, coverage).
     green_scorer: optional NAIP turf-vote fn([lat,lon])->0..1 (see naip.py).
     elev: optional DEM sampler fn([lat,lon])->meters (see naip.py).
     ground: optional imagery/DEM ground for the whole course (see naip.py):
         {'turf': [[lat,lon],...], 'turf_r': yards, 'arid': 0..1,
-         'ridges': [{'k','h','c':[[lat,lon],...],'f':[lat,lon]}, ...]}"""
+         'ridges': [{'k','h','c':[[lat,lon],...],'f':[lat,lon]}, ...]}
+    canopy: optional measured tree mask for the course (chm.sampler). Asked
+        before OSM on every timber probe; OSM answers only where the raster
+        does not reach."""
     holes = [h for h in data['h'] if str(h.get('r', '')).isdigit()]
     holes = _match_course_holes(holes, data['c'].get('n', ''))
     holes.sort(key=lambda h: int(h['r']))
@@ -1098,10 +1169,11 @@ def build_course(data, green_scorer=None, elev=None, ground=None):
     feats = [(t, g) for t, g in data['f'] if t != 'x']
     packs = []
     for h in holes:
-        p = build_hole(h, feats, woods, seed=int(h['r']), elev=elev, ground=ground)
+        p = build_hole(h, feats, woods, seed=int(h['r']), elev=elev,
+                       ground=ground, canopy=canopy)
         if p: packs.append(p)
     packs = _synthesize(packs, holes, feats, woods, green_scorer=green_scorer,
-                        ground=ground)
+                        ground=ground, canopy=canopy)
     # ---- course-aware voice pass: ranks, then compose with no repeats ----
     if packs:
         last = max(p['hole'] for p in packs)
