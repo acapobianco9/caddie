@@ -758,8 +758,48 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
 
     # ---- facts for the voice ----
     def _sd(feat_pts, at):
-        p = point_at_arc(line, min(max(at, 20), total - 1))
-        return 'left' if centroid(feat_pts)[0] < p[0] else 'right'
+        """Which side of the line does this feature sit on?
+
+        Taken from the point CLOSEST to the line, not the centroid. A lagoon
+        that wraps a dogleg balances its centroid out in the middle of the
+        hole, which is how Doral Red Tiger #3 ended up calling its water the
+        wrong side.
+        """
+        best, side = 1e18, 'right'
+        for q in feat_pts:
+            d, arc = line_dist(q, line)
+            if d < best:
+                best = d
+                p = point_at_arc(line, min(max(arc, 0.0), total))
+                side = 'left' if q[0] < p[0] else 'right'
+        return side
+
+    def _wet_sides(fl, band=45.0, bucket=10.0, step=5.0):
+        """Yards of the hole that run wet on each side.
+
+        Sampled along the polygon EDGES and bucketed by arc, for two reasons.
+        Counting polygon nodes lets a 34-node lagoon outvote a 13-node lake;
+        and taking a single nearest point lets a body that merely nips the
+        line by the tee claim the whole hole. What a player needs to know is
+        how much of the walk has water beside it, which is what this measures.
+        """
+        wet = {'left': set(), 'right': set()}
+        for w in fl:
+            g = w['g']
+            n_pts = len(g)
+            for i in range(n_pts):
+                a0, b0 = g[i], g[(i + 1) % n_pts]
+                seg = math.hypot(b0[0] - a0[0], b0[1] - a0[1])
+                n = max(1, int(seg / step))
+                for k in range(n + 1):
+                    t = k / n
+                    q = (a0[0] + t * (b0[0] - a0[0]), a0[1] + t * (b0[1] - a0[1]))
+                    d, arc = line_dist(q, line)
+                    if d > band or arc < 0 or arc > total:
+                        continue
+                    p = point_at_arc(line, arc)
+                    wet['left' if q[0] < p[0] else 'right'].add(int(arc // bucket))
+        return {k: len(v) * bucket for k, v in wet.items()}
     cross_f = [w for w in wlike if w.get('cross') and 35 < w['cross'][1] < total - 12]
     cross_f.sort(key=lambda w: w['cross'][1])
     cross_exits = []
@@ -768,6 +808,23 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
             cross_exits.append(int(w['cross'][1]))
     lat_f = [w for w in wlike if w not in cross_f and w['near'] < total - 40]
     gsw_f = [w for w in wlike if w not in cross_f and w['near'] > total - 60]
+    # nearest first: the green-side pond a player has to carry is the closest
+    # one, not whichever came back first from Overpass
+    gsw_f.sort(key=lambda w: w['d'])
+    # WHICH SIDE IS WET. Measured over the length of the hole, and allowed to
+    # answer 'both' -- 87 of 291 sampled holes carry water on both sides, and
+    # the old rule (first feature in an unsorted list, sided by its centroid)
+    # named a side that was neither the nearest nor the biggest water on 52 of
+    # them. Telling a player to favour the half the lake is on is worse than
+    # saying nothing.
+    _wet = _wet_sides(lat_f)
+    _SIDE_MIN = 40.0        # yards of hole beside water before a side counts
+    if _wet['left'] >= _SIDE_MIN and _wet['right'] >= _SIDE_MIN:
+        _lateral = 'both'
+    elif max(_wet['left'], _wet['right']) >= _SIDE_MIN:
+        _lateral = 'left' if _wet['left'] > _wet['right'] else 'right'
+    else:
+        _lateral = None
     bz_f = [b for b in bunkers if 150 < b['near'] < min(340, total - 60)]
     keyb = max(bz_f, key=lambda b: area(b['g'])) if bz_f else None
     lay_f = [b for b in bunkers if 340 < b['near'] < total - 60] if par == 5 else []
@@ -780,7 +837,8 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
         'bend': ({'at': int(round(bend[0])), 'dir': bdir,
                   'severe': abs(bend[1]) > math.radians(30)} if bend else None),
         'cross': [e for e in cross_exits if e >= 90][:2] or None,
-        'lateral': _sd(lat_f[0]['g'], lat_f[0]['near']) if lat_f else None,
+        'lateral': _lateral,
+        'lateral_yds': {'left': int(_wet['left']), 'right': int(_wet['right'])},
         'gside_water': _sd(gsw_f[0]['g'], gsw_f[0]['near']) if gsw_f else None,
         'key_bunker': ({'side': _sd(keyb['g'], keyb['near']),
                         'near': int(round(keyb['near']))} if keyb else None),
