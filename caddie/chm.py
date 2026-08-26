@@ -1,0 +1,426 @@
+#!/usr/bin/env python3
+"""Trees, from a measured canopy height model.
+
+Texture failed because NDVI variance is a proxy for a tree. Height is not a
+proxy -- a pixel that reads 14 metres is a tree, and no amount of mowing
+stripes or contrast stretch changes that. WRI and Meta publish a global canopy
+height model as public cloud-optimised GeoTIFFs on S3; a COG lets us pull only
+the couple of thousand pixels over one golf course rather than the whole tile.
+
+This is a survey, the same standing as OSM -- just one nobody had to
+volunteer for. So reading it keeps the rule intact: still nothing invented.
+
+    SUPABASE_URL=... SUPABASE_SERVICE_KEY=... python caddie/chm.py KEY[,KEY...]
+
+Writes demo/chm_<key>.html per course and demo/chm_index.html.
+"""
+import json, math, os, sys, urllib.parse, urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+
+BUCKET = 'https://dataforgood-fb-data.s3.amazonaws.com'
+SOURCES = [
+    ('v2', f'{BUCKET}/forests/v2/global/dinov3_global_chm_v2_ml3/chm/%s.tif'),
+    ('v1', f'{BUCKET}/forests/v1/alsgedi_global_v6_float/chm/%s.tif'),
+]
+ZOOM = 10
+TREE_M = 3.0        # a golf tree; below this is scrub, hedge or a bad pixel
+PROBES = [10.0, 16.0, 22.0, 30.0, 38.0, 46.0, 55.0, 65.0, 75.0, 90.0, 110.0]
+
+
+def _get(path):
+    url = os.environ['SUPABASE_URL'].rstrip('/') + '/rest/v1/' + path
+    key = os.environ['SUPABASE_SERVICE_KEY']
+    req = urllib.request.Request(url, headers={
+        'apikey': key, 'Authorization': 'Bearer ' + key,
+        'Accept': 'application/json'})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.loads(r.read().decode())
+
+
+# ---------------------------------------------------------------- quadkey
+
+def quadkey(lat, lon, z=ZOOM):
+    lat = max(-85.05112878, min(85.05112878, lat))
+    n = 1 << z
+    x = int((lon + 180.0) / 360.0 * n)
+    s = math.sin(math.radians(lat))
+    y = int((0.5 - math.log((1 + s) / (1 - s)) / (4 * math.pi)) * n)
+    x = max(0, min(n - 1, x)); y = max(0, min(n - 1, y))
+    out = []
+    for i in range(z, 0, -1):
+        d, mask = 0, 1 << (i - 1)
+        if x & mask: d += 1
+        if y & mask: d += 2
+        out.append(str(d))
+    return ''.join(out)
+
+
+# ---------------------------------------------------------------- the chip
+
+def chm_chip(lat, lng, pad_m=1300.0):
+    """A height raster over one course, plus a lat/lon -> pixel mapper.
+
+    Reports what it found rather than assuming: the model's CRS, resolution
+    and nodata all come off the file, because guessing any of them is how you
+    end up measuring the wrong thing confidently.
+    """
+    import numpy as np
+    import rasterio
+    from rasterio.windows import from_bounds
+    from rasterio.warp import transform as warp_transform
+
+    qk = quadkey(lat, lng)
+    dlat = pad_m / 110540.0
+    dlon = pad_m / (111320.0 * math.cos(math.radians(lat)))
+    errs = []
+    for tag, tmpl in SOURCES:
+        url = '/vsicurl/' + (tmpl % qk)
+        try:
+            with rasterio.open(url) as ds:
+                crs = ds.crs
+                lons = [lng - dlon, lng + dlon, lng + dlon, lng - dlon]
+                lats = [lat - dlat, lat - dlat, lat + dlat, lat + dlat]
+                xs, ys = warp_transform('EPSG:4326', crs, lons, lats)
+                win = from_bounds(min(xs), min(ys), max(xs), max(ys), ds.transform)
+                fill = ds.nodata if ds.nodata is not None else 0
+                arr = ds.read(1, window=win, boundless=True, fill_value=fill)
+                wt = ds.window_transform(win)
+                info = {'source': tag, 'quadkey': qk, 'crs': str(crs),
+                        'dtype': ds.dtypes[0], 'nodata': ds.nodata,
+                        'tile_px': [ds.width, ds.height],
+                        'window_px': [int(arr.shape[1]), int(arr.shape[0])]}
+                nod = ds.nodata
+
+            a = arr.astype('float32')
+            if nod is not None:
+                a[arr == nod] = np.nan
+
+            # Ground resolution, worked out from the file rather than assumed:
+            # 4326 is degrees, 3857 is inflated mercator metres, anything else
+            # (UTM and friends) is already true metres.
+            epsg = crs.to_epsg()
+            px = abs(wt.a)
+            if epsg == 4326:
+                m_per_px = px * 111320.0 * math.cos(math.radians(lat))
+            elif epsg == 3857:
+                m_per_px = px * math.cos(math.radians(lat))
+            else:
+                m_per_px = px
+            info['m_per_px'] = round(float(m_per_px), 3)
+
+            # A local affine, fitted once from three reference points. Over
+            # 2.6km the projection is linear to well under a metre, and this
+            # keeps the probe loop to arithmetic instead of a pyproj call per
+            # sample (roughly 16,000 of them per course).
+            rlat = [lat, lat + dlat, lat]
+            rlon = [lng, lng, lng + dlon]
+            RX, RY = warp_transform('EPSG:4326', crs, rlon, rlat)
+            c0 = (RX[0] - wt.c) / wt.a
+            r0 = (RY[0] - wt.f) / wt.e
+            dc_dlat = ((RX[1] - wt.c) / wt.a - c0) / dlat
+            dr_dlat = ((RY[1] - wt.f) / wt.e - r0) / dlat
+            dc_dlon = ((RX[2] - wt.c) / wt.a - c0) / dlon
+            dr_dlon = ((RY[2] - wt.f) / wt.e - r0) / dlon
+
+            def to_px(la, lo):
+                dla, dlo = la - lat, lo - lng
+                return (c0 + dc_dlat * dla + dc_dlon * dlo,
+                        r0 + dr_dlat * dla + dr_dlon * dlo)
+
+            # prove the affine against the real projection at a far corner
+            cx, cy = to_px(lat + dlat, lng + dlon)
+            TX, TY = warp_transform('EPSG:4326', crs, [lng + dlon], [lat + dlat])
+            ex = abs(cx - (TX[0] - wt.c) / wt.a) * m_per_px
+            ey = abs(cy - (TY[0] - wt.f) / wt.e) * m_per_px
+            info['affine_err_m'] = round(float(max(ex, ey)), 3)
+            return a, to_px, info
+        except Exception as e:
+            errs.append(f'{tag}: {type(e).__name__}: {str(e)[:110]}')
+    raise RuntimeError(f'no canopy tile for {qk} :: ' + ' | '.join(errs))
+
+
+# ---------------------------------------------------------------- geometry
+
+def project_yd(pts_ll, lat0, lon0):
+    k = math.cos(math.radians(lat0)) * 121740.0
+    return [((p[1] - lon0) * k, -(p[0] - lat0) * 121740.0) for p in pts_ll]
+
+
+def wood_gap(hgt, to_px, m_per_px, line_ll, lat0, lon0):
+    """For each hole: how far off the line, each side, does timber start?
+
+    The same question generate.PROBES asks of OSM, asked of the height model
+    instead. Returns per-side first-timber distance in yards, and the share of
+    the walk that has timber inside 60 yards -- which is what a chute is."""
+    line = project_yd(line_ll, lat0, lon0)
+    total = sum(math.hypot(line[i+1][0]-line[i][0], line[i+1][1]-line[i][1])
+                for i in range(len(line)-1))
+    if total < 60:
+        return None
+
+    def at(a):
+        cum = 0.0
+        for i in range(len(line)-1):
+            L = math.hypot(line[i+1][0]-line[i][0], line[i+1][1]-line[i][1])
+            if cum + L >= a and L:
+                t = (a-cum)/L
+                return (line[i][0]+t*(line[i+1][0]-line[i][0]),
+                        line[i][1]+t*(line[i+1][1]-line[i][1]),
+                        (line[i+1][0]-line[i][0])/L, (line[i+1][1]-line[i][1])/L)
+            cum += L
+        x, y = line[-1]
+        return (x, y, 0.0, -1.0)
+
+    def yd_to_ll(x, y):
+        k = math.cos(math.radians(lat0)) * 121740.0
+        return (lat0 - y / 121740.0, lon0 + x / k)
+
+    def tall(x, y):
+        la, lo = yd_to_ll(x, y)
+        c, r = to_px(la, lo)
+        c, r = int(round(c)), int(round(r))
+        if not (0 <= r < hgt.shape[0] and 0 <= c < hgt.shape[1]):
+            return None
+        v = hgt[r, c]
+        return None if (v != v) else bool(v >= TREE_M)
+
+    firsts = {-1: None, 1: None}
+    chute = 0
+    steps = 0
+    a = 10.0
+    while a <= total - 10.0:
+        x, y, dx, dy = at(a)
+        steps += 1
+        near = 0
+        for side in (-1, 1):
+            for d in PROBES:
+                q = (x - dy*side*d, y + dx*side*d)
+                t = tall(*q)
+                if t:
+                    if firsts[side] is None or d < firsts[side]:
+                        firsts[side] = d
+                    if d <= 60:
+                        near += 1
+                    break
+        if near == 2:
+            chute += 1
+        a += 12.0
+    return {'total': round(total), 'left': firsts[-1], 'right': firsts[1],
+            'chute_pct': round(100.0 * chute / max(1, steps))}
+
+
+# ---------------------------------------------------------------- output
+
+def mask_png(hgt, lo=TREE_M):
+    """The tall-pixel mask as a transparent PNG data URI.
+
+    A 2.6km chip at 1m is nearly seven million pixels; drawing them as SVG
+    rectangles would be absurd. An image is exact and small.
+    """
+    import base64, io
+    import numpy as np
+    from PIL import Image
+    h = np.nan_to_num(hgt, nan=0.0)
+    tall = h >= lo
+    rgba = np.zeros(h.shape + (4,), dtype='uint8')
+    # ramp the green with height so a hedge and an oak do not look alike
+    k = np.clip((h - lo) / 22.0, 0, 1)
+    rgba[..., 0] = (20 + 20 * (1 - k)).astype('uint8')
+    rgba[..., 1] = (90 + 70 * (1 - k)).astype('uint8')
+    rgba[..., 2] = (40 + 30 * (1 - k)).astype('uint8')
+    rgba[..., 3] = np.where(tall, (110 + 110 * k).astype('uint8'), 0)
+    buf = io.BytesIO()
+    Image.fromarray(rgba, 'RGBA').save(buf, format='PNG', optimize=True)
+    return 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode()
+
+
+PAGE_CSS = """
+body{margin:0;background:#F2F1EC;color:#0C1710;font-family:Archivo,system-ui,sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding:40px 20px 80px}
+h1{font-family:Fraunces,Georgia,serif;font-size:32px;margin:0 0 6px;letter-spacing:-.015em}
+p.dek{color:#6D7770;max-width:76ch;margin:0 0 20px;font-size:15px;line-height:1.6}
+table{border-collapse:collapse;font-size:13.5px;background:#fff;border:1px solid #E3E3DC;margin:0 0 22px}
+th,td{padding:7px 13px;border-bottom:1px solid #EEEEE8;text-align:left}
+th{font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;color:#6D7770}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+tr.chute td{background:#F2F7EE}
+.stage{position:relative;aspect-ratio:1;border:1px solid #E3E3DC;border-radius:3px;
+ overflow:hidden;background:#0C1710}
+.stage img{position:absolute;inset:0;width:100%;height:100%}
+.stage img.m{image-rendering:pixelated}
+.stage svg{position:absolute;inset:0;width:100%;height:100%}
+.hl{stroke:#C7F24A;stroke-width:2.2;fill:none;opacity:.95}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+figcaption{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:#6D7770;
+ margin:0 0 6px;font-weight:600}
+figure{margin:0}
+@media(max-width:820px){.pair{grid-template-columns:1fr}}
+"""
+
+
+def one(key):
+    import osm
+    q = urllib.parse.quote(key, safe='')
+    course = (_get(f'courses?select=key,name,info,market_key&key=eq.{q}') or [{}])[0]
+    if not course:
+        return {'key': key, 'error': 'no such course'}
+    info = course.get('info') or {}
+    lat, lng = info.get('lat'), info.get('lng')
+    if lat is None or lng is None:
+        return {'key': key, 'error': 'no coordinates'}
+    name = course.get('name') or key
+
+    hgt, to_px, meta = chm_chip(lat, lng)
+    print(f'[{key}] {meta}', flush=True)
+
+    feats = osm.fetch_course(key, name, course.get('market_key') or '', lat, lng)
+    holes = (feats or {}).get('h') or []
+    rows = []
+    for h in holes:
+        ll = h.get('l') or []
+        if len(ll) < 2:
+            continue
+        g = wood_gap(hgt, to_px, meta['m_per_px'], ll, ll[0][0], ll[0][1])
+        if not g:
+            continue
+        g['ref'] = str(h.get('r') or '?')
+        rows.append(g)
+    rows.sort(key=lambda r: (len(r['ref']), r['ref']))
+
+    import numpy as np
+    finite = hgt[np.isfinite(hgt)]
+    tall_pct = round(100.0 * float((finite >= TREE_M).mean()), 1) if finite.size else None
+    both = [r for r in rows if r['left'] is not None and r['right'] is not None]
+    row = {'key': key, 'name': name, 'lat': lat, 'lng': lng,
+           'source': meta['source'], 'm_per_px': meta['m_per_px'],
+           'crs': meta['crs'], 'affine_err_m': meta.get('affine_err_m'),
+           'holes': len(rows), 'tall_pct': tall_pct,
+           'holes_with_timber': sum(1 for r in rows
+                                    if r['left'] is not None or r['right'] is not None),
+           'holes_both_sides': len(both),
+           'median_chute': (sorted(r['chute_pct'] for r in rows)[len(rows)//2]
+                            if rows else None)}
+    write_page(key, name, lat, lng, hgt, to_px, meta, holes, rows, row)
+    print(f'  {key:<40} {row["holes_with_timber"]}/{row["holes"]} holes have timber, '
+          f'{row["holes_both_sides"]} both sides, median chute {row["median_chute"]}%',
+          flush=True)
+    return row
+
+
+def write_page(key, name, lat, lng, hgt, to_px, meta, holes, rows, summary):
+    import naip
+    pad_m = 1300.0
+    dlat = pad_m / 110540.0
+    dlon = pad_m / (111320.0 * math.cos(math.radians(lat)))
+    bb = (lng - dlon, lat - dlat, lng + dlon, lat + dlat)
+    aer = (f'{naip.SERVER}?bbox={bb[0]},{bb[1]},{bb[2]},{bb[3]}'
+           f'&bboxSR=4326&imageSR=4326&size=1200,1200&format=jpg&f=image')
+    H, W = hgt.shape
+
+    def vb(la, lo):
+        c, r = to_px(la, lo)
+        return 1000.0 * c / W, 1000.0 * r / H
+
+    paths = []
+    for h in holes:
+        ll = h.get('l') or []
+        if len(ll) < 2:
+            continue
+        pts = ' '.join(f'{x:.1f},{y:.1f}' for x, y in (vb(p[0], p[1]) for p in ll))
+        paths.append(f'<polyline class="hl" points="{pts}"/>')
+    lines = ''.join(paths)
+    png = mask_png(hgt)
+
+    trs = ''.join(
+        f'<tr class="{"chute" if r["chute_pct"] >= 60 else ""}">'
+        f'<td>{r["ref"]}</td><td class="n">{r["total"]}</td>'
+        f'<td class="n">{"&mdash;" if r["left"] is None else int(r["left"])}</td>'
+        f'<td class="n">{"&mdash;" if r["right"] is None else int(r["right"])}</td>'
+        f'<td class="n">{r["chute_pct"]}%</td></tr>' for r in rows)
+
+    html = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<title>Canopy height &mdash; {name}</title>'
+            '<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600'
+            '&family=Archivo:wght@400;600&display=swap" rel="stylesheet">'
+            f'<style>{PAGE_CSS}</style></head><body><div class="wrap">'
+            f'<h1>Canopy height &mdash; {name}</h1>'
+            f'<p class="dek">Measured tree height over the course, from the WRI/Meta model '
+            f'({meta["source"]}, {meta["m_per_px"]} m/px, {meta["crs"]}). Green is ground '
+            f'standing {TREE_M:g} m or taller, darker with height. Yellow is the surveyed '
+            f'playing line. Everything on this page is measured &mdash; the question is '
+            f'whether the timber sits where the aerial says it does, and whether the corridor '
+            f'it leaves matches the hole.</p>'
+            f'<table><tbody>'
+            f'<tr><th>Chip</th><td class="n">{meta["window_px"][0]}&times;{meta["window_px"][1]} px</td></tr>'
+            f'<tr><th>Ground over {TREE_M:g}m</th><td class="n">{summary["tall_pct"]}%</td></tr>'
+            f'<tr><th>Holes with timber</th><td class="n">{summary["holes_with_timber"]} / {summary["holes"]}</td></tr>'
+            f'<tr><th>Timber both sides</th><td class="n">{summary["holes_both_sides"]}</td></tr>'
+            f'<tr><th>Median chute</th><td class="n">{summary["median_chute"]}%</td></tr>'
+            f'<tr><th>Affine error</th><td class="n">{meta.get("affine_err_m")} m</td></tr>'
+            f'</tbody></table>'
+            '<div class="pair">'
+            f'<figure><figcaption>aerial</figcaption><div class="stage">'
+            f'<img src="{aer}" alt=""><svg viewBox="0 0 1000 1000">{lines}</svg></div></figure>'
+            f'<figure><figcaption>canopy height over the aerial</figcaption><div class="stage">'
+            f'<img src="{aer}" alt=""><img class="m" src="{png}" alt="">'
+            f'<svg viewBox="0 0 1000 1000">{lines}</svg></div></figure></div>'
+            '<h1 style="font-size:20px;margin:32px 0 8px">Per hole</h1>'
+            '<p class="dek">First timber, in yards off the playing line, each side. '
+            '&ldquo;Chute&rdquo; is the share of the walk with timber inside 60 yards on '
+            '<em>both</em> sides &mdash; the number that says how the hole plays.</p>'
+            '<table><thead><tr><th>Hole</th><th>Yards</th><th>Left</th><th>Right</th>'
+            f'<th>Chute</th></tr></thead><tbody>{trs}</tbody></table>'
+            '</div></body></html>')
+    os.makedirs(os.path.join(ROOT, 'demo'), exist_ok=True)
+    open(os.path.join(ROOT, 'demo', f'chm_{key}.html'), 'w').write(html)
+
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit('usage: chm.py <course_key>[,<course_key>...]')
+    keys = [k.strip() for k in sys.argv[1].split(',') if k.strip()]
+    rows = []
+    for k in keys:
+        try:
+            rows.append(one(k))
+        except Exception as e:
+            print(f'  [{k}] FAILED: {type(e).__name__}: {e}', flush=True)
+            rows.append({'key': k, 'error': f'{type(e).__name__}: {str(e)[:160]}'})
+    good = [r for r in rows if not r.get('error')]
+    if not good:
+        sys.exit('every course failed')
+    trs = ''.join(
+        (f'<tr><td>{r["key"]}</td><td colspan="7">{r["error"]}</td></tr>'
+         if r.get('error') else
+         f'<tr><td><a href="chm_{r["key"]}.html">{r["name"]}</a></td>'
+         f'<td class="n">{r["source"]}</td><td class="n">{r["m_per_px"]}</td>'
+         f'<td class="n">{r["tall_pct"]}%</td>'
+         f'<td class="n">{r["holes_with_timber"]} / {r["holes"]}</td>'
+         f'<td class="n">{r["holes_both_sides"]}</td>'
+         f'<td class="n">{r["median_chute"]}%</td>'
+         f'<td class="n">{r["affine_err_m"]}</td></tr>')
+        for r in rows)
+    html = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            '<title>Canopy height review</title>'
+            '<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600'
+            '&family=Archivo:wght@400;600&display=swap" rel="stylesheet">'
+            f'<style>{PAGE_CSS}</style></head><body><div class="wrap">'
+            '<h1>Canopy height review</h1>'
+            '<p class="dek">Measured tree height per course. <b>Holes with timber</b> is the '
+            'number OSM could not answer at all &mdash; it had nothing within 200 yards of the '
+            'line on 12 of 14 Bobby Jones holes and nothing whatsoever at Idyl Wyld.</p>'
+            '<table><thead><tr><th>Course</th><th>Src</th><th>m/px</th><th>Over 3m</th>'
+            '<th>Holes w/ timber</th><th>Both sides</th><th>Median chute</th>'
+            f'<th>Affine err</th></tr></thead><tbody>{trs}</tbody></table>'
+            '</div></body></html>')
+    os.makedirs(os.path.join(ROOT, 'demo'), exist_ok=True)
+    open(os.path.join(ROOT, 'demo', 'chm_index.html'), 'w').write(html)
+    print(f'wrote demo/chm_index.html ({len(good)} of {len(rows)} ok)', flush=True)
+
+
+if __name__ == '__main__':
+    main()
