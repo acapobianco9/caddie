@@ -91,6 +91,12 @@ def chm_chip(lat, lng, pad_m=2000.0):
                 info = {'source': tag, 'quadkey': qk, 'crs': str(crs),
                         'dtype': ds.dtypes[0], 'nodata': ds.nodata,
                         'tile_px': [ds.width, ds.height],
+                        # where the window sits on the tile. A course near a
+                        # tile edge reads past it, and boundless=True fills
+                        # that with nodata -- which must not be mistaken for
+                        # measured open ground.
+                        'win': [float(win.col_off), float(win.row_off),
+                                float(win.width), float(win.height)],
                         'window_px': [int(arr.shape[1]), int(arr.shape[0])]}
                 nod = ds.nodata
 
@@ -192,11 +198,11 @@ def tree_masks(hgt):
 
 
 def building_raster(buildings_ll, to_px, shape):
-    """OSM building footprints burned into the chip grid, for validation.
+    """OSM building footprints burned into the chip grid.
 
-    osm.py caps buildings at 60 per course, so this can only ever be a
-    partial reference -- it is here to check that what the roughness filter
-    drops really is buildings, not to do the dropping.
+    Written to validate the roughness filter; it outlived it. Since the
+    filter failed (see sampler below) these footprints ARE the building
+    removal, which only works with osm.py's cap raised off 60.
     """
     import numpy as np
     from PIL import Image, ImageDraw
@@ -210,6 +216,90 @@ def building_raster(buildings_ll, to_px, shape):
             d.polygon([(float(x), float(y)) for x, y in pts], fill=1)
             n += 1
     return np.array(im, dtype=bool), n
+
+
+# ---------------------------------------------------------------- sampler
+
+CANOPY_PAD_M = 2400.0   # osm.py fetches a 2.2km box; the chip must cover it
+BLDG_DILATE = 3         # px -- roof overhang, and OSM footprints are drawn tight
+
+
+def _dilate(b, k):
+    """Grow a boolean mask by k pixels. Shifts, not a summed-area table --
+    a float64 cumsum over a 4800px chip costs 185MB a copy."""
+    out = b
+    for _ in range(k):
+        n = out.copy()
+        n[1:, :] |= out[:-1, :]
+        n[:-1, :] |= out[1:, :]
+        n[:, 1:] |= out[:, :-1]
+        n[:, :-1] |= out[:, 1:]
+        out = n
+    return out
+
+
+class Canopy:
+    """A measured tree mask over one course, asked one point at a time."""
+
+    __slots__ = ('mask', 'valid', 'to_px', 'info')
+
+    def __init__(self, mask, valid, to_px, info):
+        self.mask, self.valid = mask, valid
+        self.to_px, self.info = to_px, info
+
+    def tall(self, lat, lon):
+        """True, False, or None for 'not measured here'.
+
+        None is not False. A point the model does not cover has not been
+        measured, and calling it open ground is exactly the mistake that had
+        Bobby Jones come back treeless on the first harness run. Off the
+        array and inside-but-unmeasured (nodata, or window fill from past
+        the tile edge) both answer None.
+        """
+        c, r = self.to_px(lat, lon)
+        c, r = int(round(c)), int(round(r))
+        v = self.valid
+        if 0 <= r < v.shape[0] and 0 <= c < v.shape[1] and v[r, c]:
+            return bool(self.mask[r, c])
+        return None
+
+
+def sampler(lat, lng, feats=None, pad_m=CANOPY_PAD_M):
+    """The GEN 10 tree source: everything over 3m, minus mapped buildings.
+
+    The roughness filter this file uses for review is deliberately NOT used
+    here. Measured against eight real courses it dropped only 7.7-19.4% of
+    the tall pixels standing on a mapped building footprint while removing
+    16-52% of ALL tall pixels -- it was eating smooth canopy interior, not
+    roofs. A roof in a canopy height model is a noisy blob rather than the
+    clean slab the synthetic scene had, so texture cannot separate the two.
+    Geometry can, so OSM footprints are burned out instead.
+    """
+    import numpy as np
+    hgt, to_px, info = chm_chip(lat, lng, pad_m=pad_m)
+    valid = np.isfinite(hgt)
+    # Pixels the window took from beyond the tile edge are fill, not ground.
+    c0, r0 = info['win'][0], info['win'][1]
+    TW, TH = info['tile_px']
+    rows, cols = valid.shape
+    rr = np.arange(rows) + r0
+    cc = np.arange(cols) + c0
+    valid[(rr < 0) | (rr >= TH), :] = False
+    valid[:, (cc < 0) | (cc >= TW)] = False
+    mask = valid & (hgt >= TREE_M)
+    del hgt
+    info['valid_pct'] = round(100.0 * float(valid.mean()), 1)
+    info['tall_px'] = int(mask.sum())
+    bld = [g for t, g in (feats or []) if t == 'u']
+    info['buildings'] = len(bld)
+    if bld:
+        braster, nb = building_raster(bld, to_px, mask.shape)
+        if nb:
+            braster = _dilate(braster, BLDG_DILATE)
+            info['building_px_cut'] = int((mask & braster).sum())
+            mask &= ~braster
+    info['tree_px'] = int(mask.sum())
+    return Canopy(mask, valid, to_px, info)
 
 
 # ---------------------------------------------------------------- geometry
