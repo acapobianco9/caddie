@@ -123,6 +123,25 @@ LAT3_BOTH = [
     "Wet left, wet right. Hit the green or take your medicine.",
 ]
 
+# Trees, measured (GEN 10). A chute is timber inside 60 yards on BOTH sides
+# for most of the walk; a squeeze is one side only. Neither sentence carries
+# a number, because the number is on the card.
+CHUTE = [
+    "Trees both sides the whole way \u2014 this one is a chute, so the tee shot is the hole.",
+    "It is timber left and timber right. Find the corridor or spend the hole punching out.",
+    "The trees close in on both sides; there is no wide miss here, only a straight one.",
+    "A proper avenue \u2014 both edges are lined, and the fairway is the only room you get.",
+]
+CHUTE3 = [
+    "Trees tight either side \u2014 take the club that keeps you between them.",
+    "The gap is the green. Both sides are timber, so miss short rather than wide.",
+]
+TREE_SIDE = [
+    "The timber squeezes the {tside}; everything you own is on the {tother}.",
+    "Trees crowd the {tside} side, which makes the {tother} half the safe half.",
+    "Favour the {tother} \u2014 the {tside} is lined, and a shot in there is a chip out.",
+]
+
 # --- approach / green sentences ---
 
 DEEP = [
@@ -176,6 +195,8 @@ def compose_read(facts, rng, used):
             s.append(_pick(rng, used, LAT3_BOTH))
         elif f.get('lateral'):
             s.append(_pick(rng, used, LAT3, wside=f['lateral']))
+        elif f.get('chute_pct', 0) >= 55:
+            s.append(_pick(rng, used, CHUTE3))
         else:
             s.append(_pick(rng, used, NO_TRICKS3))
     else:
@@ -196,6 +217,11 @@ def compose_read(facts, rng, used):
             s.append(_pick(rng, used, LATERAL_BOTH))
         elif f.get('lateral'):
             s.append(_pick(rng, used, LATERAL, wside=f['lateral'], other=other[f['lateral']]))
+        elif f.get('chute_pct', 0) >= 55:
+            s.append(_pick(rng, used, CHUTE))
+        elif f.get('tree_side'):
+            s.append(_pick(rng, used, TREE_SIDE, tside=f['tree_side'],
+                           tother=other[f['tree_side']]))
         elif f.get('key_bunker'):
             s.append(_pick(rng, used, KEY_BUNKER, sside=f['key_bunker']['side'],
                            bnear=f['key_bunker']['near']))
@@ -254,6 +280,7 @@ def _trait_buckets(facts, is_last, is_first):
         b.append('river' if f.get('water_is_river') else 'pond')
         b.append('water')
     if f.get('sand_count', 0) >= 5: b.append('sand_heavy')
+    if f.get('chute_pct', 0) >= 55: b.append('chute')
     if f.get('stands'): b.append('trees')
     if not (f.get('cross') or f.get('lateral') or f.get('key_bunker') or f.get('bend')):
         b.append('honest')
