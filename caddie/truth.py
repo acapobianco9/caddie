@@ -173,6 +173,7 @@ def timber_report(packs, geo_map, raw):
     """
     KINDS = {'x': 'wood', 'X': 'tree_row', 'T': 'tree'}
     have = [(t, g) for t, g in raw if t in KINDS]
+    rows = []
     print(f'--- timber: {len(have)} mapped features on this course ---', flush=True)
     print('hole   nearest   kind        within 55   within 100   within 200', flush=True)
     for p in packs:
@@ -193,6 +194,9 @@ def timber_report(packs, geo_map, raw):
         shown = '  none' if best > 1e17 else f'{best:6.0f}'
         print(f'{p["hole"]:>4}  {shown}   {kind:<10}  {n55:>9}   {n100:>10}   {n200:>10}',
               flush=True)
+        rows.append({'hole': p['hole'], 'near': None if best > 1e17 else round(best),
+                     'kind': kind, 'n55': n55, 'n100': n100, 'n200': n200})
+    return rows
 
 
 # ---------------------------------------------------------------- page
@@ -243,6 +247,8 @@ def main():
         cards.append({'hole': p['hole'], 'par': p['par'], 'yds': p['yards']['mid'],
                       'art': m.group(1), 'img': url, 'w': W, 'h': H, 'm': M})
 
+    timber = timber_report(packs, fallback or {}, raw) if raw else []
+
     body = []
     for c in cards:
         a, b, cc, d, e, f = c['m']
@@ -262,6 +268,22 @@ def main():
         <div class="lay" style="opacity:.55">{c['art']}</div></div></figure>
   </div>
 </section>''')
+
+    if timber:
+        trs = ''.join(
+            '<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>'
+            .format(t['hole'], 'none' if t['near'] is None else t['near'],
+                    t['kind'], t['n55'], t['n100'], t['n200'])
+            for t in timber)
+        tim_html = ('<section class=timber><h2>Mapped timber</h2>'
+                    '<p>Distance from the playing line to the nearest surveyed wood, '
+                    'tree row or tree, and how many such features fall within each '
+                    'band. generate.PROBES only looks out to 55 yards.</p>'
+                    '<table><thead><tr><th>Hole</th><th>Nearest (yd)</th><th>Kind</th>'
+                    '<th>within 55</th><th>within 100</th><th>within 200</th></tr>'
+                    '</thead><tbody>' + trs + '</tbody></table></section>')
+    else:
+        tim_html = ''
 
     html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -289,6 +311,15 @@ figcaption{{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color
 .lay{{position:absolute;inset:0;mix-blend-mode:normal}}
 .lay svg{{background:transparent!important}}
 .sl{{width:90px;accent-color:#14432A}}
+.timber{{margin:44px 0 0;border-top:1px solid #E3E3DC;padding-top:22px}}
+.timber h2{{font-family:Fraunces,Georgia,serif;font-size:22px;margin:0 0 6px}}
+.timber p{{color:#6D7770;font-size:14px;margin:0 0 14px;max-width:70ch}}
+.timber table{{border-collapse:collapse;font-size:13.5px;background:#fff;
+ border:1px solid #E3E3DC;border-radius:3px}}
+.timber th,.timber td{{padding:7px 14px;border-bottom:1px solid #EEEEE8;text-align:left}}
+.timber th{{font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;color:#6D7770}}
+.timber td:nth-child(n+2){{text-align:right;font-variant-numeric:tabular-nums}}
+.timber td:nth-child(3){{text-align:left}}
 @media(max-width:860px){{.pair{{grid-template-columns:1fr}}}}
 </style></head><body><div class="wrap">
 <h1>Ground truth &mdash; {name}</h1>
@@ -297,6 +328,7 @@ same scale and rotation. The aerial is the survey no one edited. If a bunker,
 a pond or a treeline on the card does not sit on the thing in the photograph,
 the generator is wrong &mdash; not the photograph.</p>
 {''.join(body)}
+{tim_html}
 </div>
 <script>
 document.querySelectorAll('.sl').forEach(function(s){{
@@ -306,9 +338,6 @@ document.querySelectorAll('.sl').forEach(function(s){{
   }});
 }});
 </script></body></html>'''
-
-    if raw:
-        timber_report(packs, fallback or {}, raw)
 
     if not cards:
         sys.exit('no holes could be georeferenced -- nothing to compare')
