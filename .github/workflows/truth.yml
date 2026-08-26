@@ -1,0 +1,52 @@
+name: caddie-truth
+
+# Lays each hole card over the USGS NAIP aerial of the same ground, at the
+# same scale and rotation, and commits the page to demo/. This is the only
+# check in the repo that judges the generator against the golf course rather
+# than against its own packs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      course:
+        description: "course_key (e.g. sf_trump_national_doral_miami_red_tiger_cou)"
+        required: true
+      holes:
+        description: "optional hole numbers, comma separated (blank = all)"
+        required: false
+        default: ""
+
+jobs:
+  truth:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Lay the cards over the ground
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          COURSE: ${{ github.event.inputs.course }}
+          HOLES: ${{ github.event.inputs.holes }}
+        run: |
+          set -euo pipefail
+          test -f caddie/truth.py
+          python caddie/truth.py "$COURSE" "$HOLES"
+          test -f "demo/truth_${COURSE}.html"
+
+      - name: Commit the page
+        env:
+          COURSE: ${{ github.event.inputs.course }}
+        run: |
+          set -euo pipefail
+          git config user.name "caddie-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add demo/
+          git commit -m "truth: $COURSE" || echo "nothing to commit"
+          git push
