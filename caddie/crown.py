@@ -1074,7 +1074,7 @@ body{font-family:'Archivo',sans-serif;background:var(--paper);color:var(--ink);p
 .holeart .surf{fill:none;stroke:#FFFFFF;stroke-width:3.2;opacity:.90;stroke-linecap:round}
 .holeart .cliff-e{fill:none;stroke:var(--ink);stroke-width:1.6;opacity:.62}
 .holeart .mhw{fill:none;stroke:#5F7C88;stroke-width:1.2;opacity:.55;stroke-dasharray:7 6}
-.holeart .wat-big{fill:var(--water-d);fill-opacity:.12;stroke:none}
+.holeart .wat-big{fill:var(--water-d);fill-opacity:.22;stroke:none}
 .holeart .wat-o{fill:none;stroke:var(--ink);stroke-width:1.4;stroke-linejoin:round}
 .holeart .shallow{fill:var(--water);stroke:none}
 .holeart .shot{stroke:var(--forest);stroke-width:1.2;stroke-dasharray:2 4;fill:none;opacity:.7}
