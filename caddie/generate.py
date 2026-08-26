@@ -844,6 +844,12 @@ def build_hole(hole, feats, woods, seed=0, claim_green=None, elev=None, ground=N
         'dunes': dunes,
         'turf': turf,
         'facts': facts,
+        # Where this hole actually is. build_hole projects into local
+        # yards about the tee and rotates so the hole plays up the page;
+        # without these three numbers a pack cannot be laid back over the
+        # ground it came from, which is what caddie/truth.py does.
+        'geo': {'lat': round(lat0, 7), 'lon': round(lon0, 7),
+                'ang': round(ang, 6)},
         'read': '', 'sign': '',
         '_srcs': ({id(greens[0]['src'])} if has_green else set())
                  | {id(t['src']) for t in tees[:4]},
