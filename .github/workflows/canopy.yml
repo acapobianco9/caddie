@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       course:
-        description: "course_key (e.g. atl_bobby_jones)"
+        description: "course_key, or several separated by commas"
         required: true
 
 jobs:
@@ -36,7 +36,7 @@ jobs:
           set -euo pipefail
           test -f caddie/canopy.py
           python caddie/canopy.py "$COURSE"
-          test -s "demo/canopy_${COURSE}.html"
+          test -s demo/canopy_index.html
 
       - name: Commit the page
         env:
