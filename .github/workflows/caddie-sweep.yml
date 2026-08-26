@@ -47,14 +47,19 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Imagery deps (NAIP stage)
-        run: pip install --quiet pillow numpy
+      - name: Imagery and raster deps (NAIP + canopy stages)
+        run: pip install --quiet pillow numpy rasterio
 
       - name: Sweep (lane ${{ matrix.shard }} of 6)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           SWEEP_SLEEP: "1.8"
+          # the canopy tiles are public cloud-optimised GeoTIFFs on S3;
+          # GDAL must not try to sign, list, or sniff siblings.
+          GDAL_DISABLE_READDIR_ON_OPEN: EMPTY_DIR
+          CPL_VSIL_CURL_ALLOWED_EXTENSIONS: .tif
+          AWS_NO_SIGN_REQUEST: "YES"
           SWEEP_MIRROR: "${{ matrix.shard }}"
           MARKET: ${{ github.event.inputs.market || 'all' }}
           COURSE: ${{ github.event.inputs.course || '' }}
