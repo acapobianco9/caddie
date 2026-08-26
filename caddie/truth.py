@@ -147,7 +147,52 @@ def geo_from_osm(course, packs):
         for i, (_, g) in enumerate(good, 1):
             out[i] = g
     print(f'osm georeference: {len(out)} of {len(holes)} holes', flush=True)
-    return out
+    return out, (feats or {}).get('f') or []
+
+
+# ---------------------------------------------------------------- timber
+
+def _seg_min(q, line):
+    best = 1e18
+    for i in range(len(line) - 1):
+        ax, ay = line[i]; bx, by = line[i + 1]
+        dx, dy = bx - ax, by - ay
+        L = dx * dx + dy * dy
+        t = 0.0 if L == 0 else max(0.0, min(1.0, ((q[0] - ax) * dx + (q[1] - ay) * dy) / L))
+        best = min(best, math.hypot(q[0] - (ax + t * dx), q[1] - (ay + t * dy)))
+    return best
+
+
+def timber_report(packs, geo_map, raw):
+    """How far off the playing line is the nearest MAPPED timber?
+
+    generate.PROBES stops at 55 yards. If the timber on these courses sits at
+    70 or 90, extending the ladder is a one-constant fix. If there is nothing
+    within 250, the woodland is simply not surveyed here and no probe ladder
+    will ever find it -- which would mean the answer is imagery, not OSM.
+    """
+    KINDS = {'x': 'wood', 'X': 'tree_row', 'T': 'tree'}
+    have = [(t, g) for t, g in raw if t in KINDS]
+    print(f'--- timber: {len(have)} mapped features on this course ---', flush=True)
+    print('hole   nearest   kind        within 55   within 100   within 200', flush=True)
+    for p in packs:
+        g = geo_map.get(p['hole'])
+        if not g:
+            continue
+        line = [tuple(q) for q in p['line']]
+        best, kind = 1e18, '-'
+        n55 = n100 = n200 = 0
+        for t, g_ll in have:
+            pts = rot(project(g_ll, g['lat'], g['lon']), g['ang'])
+            d = min((_seg_min(q, line) for q in pts), default=1e18)
+            if d < best:
+                best, kind = d, KINDS[t]
+            if d <= 55: n55 += 1
+            if d <= 100: n100 += 1
+            if d <= 200: n200 += 1
+        shown = '  none' if best > 1e17 else f'{best:6.0f}'
+        print(f'{p["hole"]:>4}  {shown}   {kind:<10}  {n55:>9}   {n100:>10}   {n200:>10}',
+              flush=True)
 
 
 # ---------------------------------------------------------------- page
@@ -178,13 +223,14 @@ def main():
         sys.exit('no holes selected')
 
     fallback = None
+    raw = []
     cards = []
     for p in packs:
         geo = geo_from_pack(p)
         if geo is None:
             if fallback is None:
                 print('pack has no geo -- re-deriving from OSM', flush=True)
-                fallback = geo_from_osm(course, packs)
+                fallback, raw = geo_from_osm(course, packs)
             geo = fallback.get(p['hole'])
         if geo is None:
             print(f'[skip] hole {p["hole"]}: no georeference', flush=True)
@@ -260,6 +306,9 @@ document.querySelectorAll('.sl').forEach(function(s){{
   }});
 }});
 </script></body></html>'''
+
+    if raw:
+        timber_report(packs, fallback or {}, raw)
 
     if not cards:
         sys.exit('no holes could be georeferenced -- nothing to compare')
