@@ -60,7 +60,7 @@ def quadkey(lat, lon, z=ZOOM):
 
 # ---------------------------------------------------------------- the chip
 
-def chm_chip(lat, lng, pad_m=1300.0):
+def chm_chip(lat, lng, pad_m=2000.0):
     """A height raster over one course, plus a lat/lon -> pixel mapper.
 
     Reports what it found rather than assuming: the model's CRS, resolution
@@ -190,6 +190,7 @@ def wood_gap(hgt, to_px, m_per_px, line_ll, lat0, lon0):
     firsts = {-1: None, 1: None}
     chute = 0
     steps = 0
+    oob = 0
     a = 10.0
     while a <= total - 10.0:
         x, y, dx, dy = at(a)
@@ -199,6 +200,8 @@ def wood_gap(hgt, to_px, m_per_px, line_ll, lat0, lon0):
             for d in PROBES:
                 q = (x - dy*side*d, y + dx*side*d)
                 t = tall(*q)
+                if t is None:
+                    oob += 1
                 if t:
                     if firsts[side] is None or d < firsts[side]:
                         firsts[side] = d
@@ -208,6 +211,13 @@ def wood_gap(hgt, to_px, m_per_px, line_ll, lat0, lon0):
         if near == 2:
             chute += 1
         a += 12.0
+    # A hole that falls off the edge of the height chip has not been measured
+    # and must not be reported as treeless -- that is how Bobby Jones came
+    # back with 32 holes and a 0% median chute on the first run: OSM fetches a
+    # 2.2km radius, so outlying holes from the neighbouring course sat outside
+    # the raster and scored as open ground.
+    if oob > 0.30 * steps * 2:
+        return None
     return {'total': round(total), 'left': firsts[-1], 'right': firsts[1],
             'chute_pct': round(100.0 * chute / max(1, steps))}
 
@@ -312,7 +322,7 @@ def one(key):
 
 def write_page(key, name, lat, lng, hgt, to_px, meta, holes, rows, summary):
     import naip
-    pad_m = 1300.0
+    pad_m = 2000.0
     dlat = pad_m / 110540.0
     dlon = pad_m / (111320.0 * math.cos(math.radians(lat)))
     bb = (lng - dlon, lat - dlat, lng + dlon, lat + dlat)
