@@ -1,0 +1,87 @@
+name: caddie-audit
+
+# Two questions the catalog cannot answer about itself, both read-only.
+#
+#   locations — is each course where we say it is? A wrong coordinate that
+#     lands on open ground sweeps to zero holes and looks like a course nobody
+#     mapped. A wrong coordinate that lands near ANOTHER course produces a full
+#     set of real holes filed under the wrong club, and nothing about that looks
+#     broken from the outside. (City of Mill Valley is stored 3.66 km from the
+#     actual course; that is how this got noticed.)
+#
+#   survey — of the courses we render nothing for, how many are genuinely
+#     unmapped and how many have greens and tees but no hole centrelines? The
+#     second group is the only group a cold-start synthesizer could ever draw,
+#     and nobody has counted it. Build-or-not depends on the number.
+#
+# Neither writes anything. Run it when you want the answer, not on a schedule.
+
+on:
+  workflow_dispatch:
+    inputs:
+      what:
+        description: "which audit"
+        type: choice
+        required: true
+        default: "survey"
+        options: [survey, locations, both]
+      sample:
+        description: "survey: how many blank courses to check (0 = all)"
+        required: false
+        default: "200"
+      scope:
+        description: "locations: --all, or a market key like long_island"
+        required: false
+        default: "--all"
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 210
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The synthesizer question. Fast — a few minutes at the default sample.
+      - name: Survey the blank courses
+        if: ${{ inputs.what == 'survey' || inputs.what == 'both' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SURVEY_SLEEP: "1.6"
+        run: |
+          if [ "${{ inputs.sample }}" = "0" ]; then
+            python caddie/survey_none.py --all | tee survey.txt
+          else
+            python caddie/survey_none.py --limit ${{ inputs.sample }} | tee survey.txt
+          fi
+
+      # The coordinate audit. Nominatim is one request per second by their
+      # usage policy, so the full catalog is roughly 95 minutes. It exits
+      # non-zero when it flags anything — that is a finding, not a failure,
+      # so the report is still uploaded and the job is still allowed to pass.
+      - name: Audit course locations
+        if: ${{ inputs.what == 'locations' || inputs.what == 'both' }}
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ "${{ inputs.scope }}" = "--all" ]; then
+            python caddie/verify_locations.py --all | tee locations.txt
+          else
+            python caddie/verify_locations.py --market "${{ inputs.scope }}" | tee locations.txt
+          fi
+
+      - name: Keep the reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: caddie-audit
+          path: |
+            survey.txt
+            locations.txt
+          if-no-files-found: ignore
+          retention-days: 30
