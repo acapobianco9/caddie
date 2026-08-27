@@ -223,6 +223,20 @@ def building_raster(buildings_ll, to_px, shape):
 CANOPY_PAD_M = 2400.0   # osm.py fetches a 2.2km box; the chip must cover it
 BLDG_DILATE = 3         # px -- roof overhang, and OSM footprints are drawn tight
 
+# A tree that changes how a hole is played, as opposed to anything over 3m.
+# Measured on five Long Island courses at TREE_M: two thirds of all hole sides
+# reported timber inside 15 yards of the centreline and half of everything
+# piled onto the very first probe at 10 yards. A fairway is 30-40 yards wide,
+# so that distribution is not golf -- it is rough, scrub, mounding and young
+# growth clearing a three-metre bar. Eight metres is about twenty-six feet:
+# tall enough that you have to go over it or around it.
+CANOPY_M = 8.0
+# ...and it has to be a crown, not a pixel. A tall pixel counts only if most of
+# its 5x5 neighbourhood is tall too, which is an opening: speckle and hedgerows
+# one pixel wide fall out, a real canopy does not.
+CANOPY_WIN = 5
+CANOPY_MIN = 15         # of 25
+
 
 def _dilate(b, k):
     """Grow a boolean mask by k pixels. Shifts, not a summed-area table --
@@ -286,10 +300,16 @@ def sampler(lat, lng, feats=None, pad_m=CANOPY_PAD_M):
     cc = np.arange(cols) + c0
     valid[(rr < 0) | (rr >= TH), :] = False
     valid[:, (cc < 0) | (cc >= TW)] = False
-    mask = valid & (hgt >= TREE_M)
+    mask = valid & (hgt >= CANOPY_M)
     del hgt
     info['valid_pct'] = round(100.0 * float(valid.mean()), 1)
     info['tall_px'] = int(mask.sum())
+    # the opening: keep only pixels that sit inside a crown
+    solid = _boxsum(mask.astype('float64'), CANOPY_WIN) >= CANOPY_MIN
+    mask &= solid
+    info['crown_px'] = int(mask.sum())
+    info['speckle_dropped_pct'] = (
+        round(100.0 * (1 - info['crown_px'] / max(1, info['tall_px'])), 1))
     bld = [g for t, g in (feats or []) if t == 'u']
     info['buildings'] = len(bld)
     if bld:
