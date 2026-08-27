@@ -87,7 +87,13 @@ BASE_MIRROR = int(os.environ.get('SWEEP_MIRROR', '0'))  # spread parallel lanes 
 #    scene dropped only 8-19% of real roof pixels while eating a fifth to a
 #    half of all canopy, so it is not used. New facts: chute_pct, timber
 #    per side, tree_side, timber_measured.
-GEN = 10
+# 11: the tree threshold. GEN 10 measured reliably and measured the wrong
+#    thing — on five Long Island courses two thirds of hole sides put first
+#    timber inside 15 yards of the centreline, half of it on the very first
+#    probe. A fairway is 30-40 yards wide; that is rough and scrub clearing a
+#    3m bar, not trees. GEN 11 asks for 8m and for a crown rather than a
+#    pixel, so hedgerows and speckle fall out of the mask.
+GEN = 11
 
 
 def rest(method, path, payload=None, params=''):
