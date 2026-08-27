@@ -26,13 +26,14 @@ on:
         description: "re-sweep courses already done (true/false)"
         required: false
         default: "false"
-  # PAUSED 2026-08-26 while the GEN 10 tree threshold is settled. The first
-  # GEN 10 course put first timber within 15 yards of the centreline on 31 of
-  # 36 hole sides, which is not a golf course -- a single 3m pixel is enough
-  # to plant a treeline, and turf-height noise clears 3m. Restore this line
-  # once the mask is measured against the aerial. Manual dispatch still works.
-  # schedule:
-  #   - cron: "25 */6 * * *"   # relaunch every 6h until the catalog is done
+  # Restored 2026-08-27, after GEN 11 replaced the 3m-pixel rule with an 8m
+  # crown and a morphological opening. The measure that settled it was biome
+  # separation, not a threshold: Lido, barrier-island links with no trees on
+  # it, now comes back 0 stands per hole, while Port Jefferson, wooded and
+  # steep, comes back 2.22. On the 18 holes Port Jefferson happens to carry
+  # twice in the catalog, median chute fell 57% under GEN 10 to 38% under 11.
+  schedule:
+    - cron: "25 */6 * * *"   # relaunch every 6h until the catalog is done
 
 jobs:
   sweep:
