@@ -2,12 +2,16 @@ name: render-site
 
 # Renders every covered course into a static demo site and deploys it to
 # GitHub Pages, so each row on the sweep board has a Preview to open.
-# Runs nightly after the day's sweeps, or on demand.
+# Hourly, not nightly. The board reads Supabase live, so a course appears
+# there the moment the sweep writes it, while Preview points at this static
+# render -- and a sweep pass converts roughly 600 courses an hour. A daily
+# build left three quarters of the new rows opening a 404. The whole render
+# is about three minutes, so the cheap fix is to run it far more often.
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '25 11 * * *'
+    - cron: '55 * * * *'   # :55, clear of the sweep's :25 launch
 
 permissions:
   contents: read
