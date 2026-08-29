@@ -550,7 +550,7 @@ function boot(){
   try{ want=localStorage.getItem('caddie-style')||'book'; }catch(e){}
   var m=(location.hash+' '+location.search).match(/style=(book|crown|estate|landform|evening)/);
   if(m) want=m[1];
-  apply(want==='crown'?'crown':'book');
+  apply(({book:1,crown:1,estate:1,landform:1,evening:1})[want]?want:'book');
 }
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 
