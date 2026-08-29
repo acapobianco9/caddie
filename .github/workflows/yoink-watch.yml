@@ -1,0 +1,34 @@
+name: yoink-watch
+
+# Watches the Yoink alert engine from OUTSIDE the repo that runs it.
+#
+# The old watchdog lived in the private yoink repo. When GitHub billing
+# lapsed on 29 Aug 2026 every scheduled run there was refused, so the
+# watchdog went down silently at exactly the moment it mattered. This repo
+# is public, so its Actions minutes are free and unbillable.
+#
+# caddie/watch.py needs no secrets - it reads snapshots and courses with the
+# publishable key that already ships in the app's page source, guarded by
+# row-level security. Nothing here is worth leaking in a public log.
+#
+# Notification is the run failing: GitHub emails on a failed workflow.
+
+on:
+  schedule:
+    - cron: "17,47 * * * *"   # twice an hour, off the :00 and :30 crush
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check the engine
+        run: python caddie/watch.py
