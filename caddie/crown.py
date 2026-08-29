@@ -32,7 +32,7 @@ furniture nobody aims at, nobody carries, and nobody plans around.
 
     python caddie/crown.py packs.json "Course Name" out.html
 """
-import json, math, random, sys
+import json, math, os, random, sys
 
 VW, VH = 334, 430
 
@@ -1230,6 +1230,20 @@ def main():
               next((p for p in packs if p['par'] == 4), packs[0]))
     watch = render_watch(wp)
     par = sum(p['par'] for p in packs); yds = sum(p['yards']['mid'] for p in packs)
+    # client-side style engine: ship the minimal pack the JS renderers need,
+    # so a viewer can re-dress every hole without another network call.
+    def _client(p):
+        f = p.get('facts') or {}
+        return {'hole': p['hole'], 'par': p['par'], 'line': p['line'],
+                'green': p['green'], 'tees': p.get('tees') or [],
+                'bunkers': p.get('bunkers') or [], 'waters': p.get('waters') or [],
+                'stands': p.get('stands') or [], 'bend': p.get('bend'),
+                'fw': p.get('fw'), 'yards': p['yards'], 'sign': p.get('sign') or '',
+                'carries': p.get('carries') or [], 'depth': f.get('depth'),
+                'fw_start': f.get('fw_start'), 'total': f.get('total') or p['yards']['mid']}
+    cpacks = json.dumps([_client(p) for p in packs])
+    cmeta = json.dumps({'name': cname, 'key': packs[0].get('course_key') or cname})
+    styles_js = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'styles.js')).read()
     html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Yoink Caddie &mdash; {cname} (Crown)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1244,7 +1258,11 @@ never touches a number.</b> Every figure below was computed from the survey; eve
 crown; the voice gets the read and the last line.</p></div>
 <div class="row">{cards}{watch}</div>
 <div class="attr">Hole geometry &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a> (ODbL).</div>
-</div></body></html>'''
+</div>
+<script id="cpacks" type="application/json">{cpacks}</script>
+<script>window.CADDIE_COURSE={cmeta};</script>
+<script>{styles_js}</script>
+</body></html>'''
     open(out, 'w').write(html)
     print('wrote', out)
 
