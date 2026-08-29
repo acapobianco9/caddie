@@ -231,6 +231,276 @@ function renderBook(el, H, meta){
 
 
 
+
+// ---- shared page fit for the framed styles (Estate / Landform / Evening) ----
+function stripName(n){
+  return String(n).replace(/\s+(state park|country club|golf course|golf club|golf links|golf center|park golf course|golf and tennis club|golf and country club)$/i,'')
+    .toUpperCase().slice(0,26);
+}
+function fitPage(H){
+  var pts=[];
+  function eat(a){ (a||[]).forEach(function(p){ pts.push(p); }); }
+  eat(H.line); eat(H.green); eat(H.tees);
+  (H.bunkers||[]).forEach(eat); (H.waters||[]).forEach(eat);
+  var xs=pts.map(function(p){return p[0];}), ys=pts.map(function(p){return p[1];});
+  var minx=Math.min.apply(0,xs)-20, maxx=Math.max.apply(0,xs)+20;
+  var miny=Math.min.apply(0,ys)-16, maxy=Math.max.apply(0,ys)+6;
+  var s=Math.min(212/(maxx-minx), 452/(maxy-miny), H.par===3?2.0:1.3);
+  var tx=-24-s*(minx+maxx)/2, ty=-64-s*maxy;
+  function T(p){ return [p[0]*s+tx, p[1]*s+ty]; }
+  function Tp(a){ return (a||[]).map(T); }
+  G={ line:Tp(H.line), green:Tp(H.green), tees:Tp(H.tees),
+      bunkers:(H.bunkers||[]).map(Tp), waters:(H.waters||[]).map(Tp),
+      stands:(H.stands||[]).map(function(st){ return {d:st.d*s, a0:st.a0*s, a1:st.a1*s, side:st.side, count:st.count}; }),
+      fwStart:(function(){ var f=(H.fw_start!=null)?H.fw_start:(H.fw&&H.fw[0]?H.fw[0][0]:null); return f!=null?f*s:null; })(), bendAt:(H.bend?H.bend.at*s:null) };
+  rebuildArc();
+  return s;
+}
+
+function renderEstate(el,H,meta){
+  var s_=fitPage(H);
+  var SUF='_'+el.id;
+  var safeFw=(G.fwStart!=null)?fwWidth:function(a){return 13;};
+  var R=rng((meta.key||'c')+':'+H.hole+':estate');
+  var PAPER='#F3EDDD', PLATE='#CBC2A8', INK='#243B2E', WATER='#3E5A64', GOLD='#A98B2D';
+  var defs="<defs>"
+    +"<pattern id='eh1"+SUF+"' width='3.6' height='3.6' patternUnits='userSpaceOnUse' patternTransform='rotate(37)'><line x1='0' y1='0' x2='0' y2='3.6' stroke='"+INK+"' stroke-width='0.5' opacity='0.55'/></pattern>"
+    +"<pattern id='eh2"+SUF+"' width='3.2' height='3.2' patternUnits='userSpaceOnUse' patternTransform='rotate(-49)'><line x1='0' y1='0' x2='0' y2='3.2' stroke='"+INK+"' stroke-width='0.45' opacity='0.5'/></pattern>"
+    +"<pattern id='eh3"+SUF+"' width='6.5' height='6.5' patternUnits='userSpaceOnUse' patternTransform='rotate(37)'><line x1='0' y1='0' x2='0' y2='6.5' stroke='"+INK+"' stroke-width='0.4' opacity='0.35'/></pattern>"
+    +"<pattern id='estip"+SUF+"' width='4.4' height='4.4' patternUnits='userSpaceOnUse'><circle cx='1' cy='1.2' r='0.5' fill='"+INK+"' opacity='0.55'/><circle cx='3.1' cy='3.3' r='0.42' fill='"+INK+"' opacity='0.45'/><circle cx='2.2' cy='0.4' r='0.3' fill='"+INK+"' opacity='0.3'/></pattern>"
+    +"<filter id='ewob"+SUF+"'><feTurbulence type='fractalNoise' baseFrequency='0.11' numOctaves='2' seed='4'/><feDisplacementMap in='SourceGraphic' scale='1.1'/></filter>"
+    +"</defs>";
+var ORD=['First','Second','Third','Fourth','Fifth','Sixth','Seventh','Eighth','Ninth','Tenth','Eleventh','Twelfth','Thirteenth','Fourteenth','Fifteenth','Sixteenth','Seventeenth','Eighteenth'];
+  var estNm=stripName(meta.name||'THE COURSE');
+  var estFs=Math.max(7,Math.min(12.5,(148/Math.max(1,estNm.length)-3.2)/0.62));
+  var s="<rect x='-155' y='-565' width='260' height='615' fill='"+PAPER+"'/>";
+  // plate mark + ruled border
+  s+="<rect x='-146' y='-556' width='242' height='597' fill='none' stroke='"+PLATE+"' stroke-width='1.6'/>";
+  s+="<rect x='-140' y='-550' width='230' height='585' fill='none' stroke='"+INK+"' stroke-width='1.1'/>";
+  s+="<rect x='-137' y='-547' width='224' height='579' fill='none' stroke='"+INK+"' stroke-width='0.35'/>";
+
+  // rough: double-hatched ground, fairway carved out of it
+  var roughD=smooth(corridor(4,totalLen,function(a){return safeFw(a)+23;},R),true);
+  s+="<g filter='url(#ewob"+SUF+")'>";
+  s+="<path d='"+roughD+"' fill='url(#eh1"+SUF+")'/>";
+  s+="<path d='"+roughD+"' fill='url(#eh2"+SUF+")'/>";
+  s+="<path d='"+roughD+"' fill='none' stroke='"+INK+"' stroke-width='0.8'/>";
+  if(G.fwStart!=null){
+    var fwD=smooth(corridor(G.fwStart,totalLen-8,safeFw,null),true);
+    s+="<path d='"+fwD+"' fill='"+PAPER+"'/>";
+    s+="<path d='"+fwD+"' fill='url(#eh3"+SUF+")'/>";
+    s+="<path d='"+fwD+"' fill='none' stroke='"+INK+"' stroke-width='0.9'/>";
+  }
+  s+="</g>";
+  // approach/walk before the fairway: pale stipple path
+  s+="<path d='"+smooth(corridor(14,(G.fwStart!=null?G.fwStart+6:totalLen*0.55),function(a){return 8;},null),true)+"' fill='url(#estip"+SUF+")' opacity='0.35'/>";
+
+  // water: engraved concentric shorelines
+  G.waters.forEach(function(w){
+    s+="<g filter='url(#ewob"+SUF+")'>";
+    s+="<path d='"+smooth(w,true)+"' fill='"+PAPER+"' stroke='"+WATER+"' stroke-width='1.1'/>";
+    [0.92,0.82,0.71,0.59,0.46,0.32,0.18].forEach(function(f,i){
+      s+="<path d='"+smooth(inset(w.slice(0,-1),f),true)+"' fill='none' stroke='"+WATER+"' stroke-width='"+(0.7-i*0.06)+"' opacity='"+(0.85-i*0.1)+"'/>";
+    });
+    s+="</g>";
+  });
+  // bunkers: stipple with a lipped edge
+  G.bunkers.forEach(function(b){
+    s+="<g filter='url(#ewob"+SUF+")'><path d='"+smooth(b,true)+"' fill='url(#estip"+SUF+")' stroke='"+INK+"' stroke-width='0.9'/>";
+    s+="<path d='"+smooth(inset(b.slice(0,-1),0.6),true)+"' fill='none' stroke='"+INK+"' stroke-width='0.4' opacity='0.5'/></g>";
+  });
+  // green: contour-hatched putting surface
+  s+="<g filter='url(#ewob"+SUF+")'>";
+  s+="<path d='"+smooth(G.green,true)+"' fill='"+PAPER+"' stroke='"+INK+"' stroke-width='1.2'/>";
+  [0.78,0.55,0.32].forEach(function(f){
+    s+="<path d='"+smooth(inset(G.green.slice(0,-1),f),true)+"' fill='none' stroke='"+INK+"' stroke-width='0.45' opacity='0.55'/>";
+  });
+  s+="</g>";
+  // pin: gilded
+  var gp=lineAt(totalLen).p;
+  s+="<line x1='"+gp[0]+"' y1='"+gp[1]+"' x2='"+gp[0]+"' y2='"+(gp[1]-13)+"' stroke='"+INK+"' stroke-width='0.9'/>";
+  s+="<path d='M"+gp[0]+","+(gp[1]-13)+" l7.5,2.6 -7.5,2.6 z' fill='"+GOLD+"' stroke='"+INK+"' stroke-width='0.5'/>";
+  s+="<circle cx='"+gp[0]+"' cy='"+gp[1]+"' r='1.5' fill='"+GOLD+"' stroke='"+INK+"' stroke-width='0.6'/>";
+
+  // trees: antique estate rounds — scalloped crown, SE shade
+  treeSpots(R).forEach(function(t){
+    var x=t[0],y=t[1],r=t[2]*0.92;
+    var d='', n=9;
+    for(var i=0;i<n;i++){ var a0=i/n*Math.PI*2, a1=(i+1)/n*Math.PI*2;
+      var mx=x+Math.cos((a0+a1)/2)*r*1.24, my=y+Math.sin((a0+a1)/2)*r*0.72;
+      var x1=x+Math.cos(a1)*r, y1=y+Math.sin(a1)*r*0.58;
+      d+=(i===0?('M'+(x+r)+','+y):'')+' Q'+mx.toFixed(1)+','+my.toFixed(1)+' '+x1.toFixed(1)+','+y1.toFixed(1);
+    }
+    s+="<g filter='url(#ewob"+SUF+")'><path d='"+d+"' fill='"+PAPER+"' stroke='"+INK+"' stroke-width='0.9'/>";
+    for(var k=0;k<4;k++){
+      var f=0.25+k*0.16;
+      s+="<path d='M"+(x+r*f*0.5)+","+(y+r*0.5*f+1)+" q"+(r*0.45)+","+(r*0.28)+" "+(r*(0.95-f*0.4))+","+(r*0.12)+"' fill='none' stroke='"+INK+"' stroke-width='0.4' opacity='0.6'/>";
+    }
+    s+="<circle cx='"+x+"' cy='"+(y+1)+"' r='0.8' fill='"+INK+"'/></g>";
+  });
+  // tees: small engraved rectangles
+  G.tees.forEach(function(t){ s+="<rect x='"+(t[0]-3.6)+"' y='"+(t[1]-2)+"' width='7.2' height='4' fill='url(#eh3"+SUF+")' stroke='"+INK+"' stroke-width='0.7'/>"; });
+
+  // the line of play: fine dash, oldstyle numerals
+  s+="<path d='"+smooth(G.line,false)+"' fill='none' stroke='"+INK+"' stroke-width='0.7' stroke-dasharray='5 3.4'/>";
+  var pips=[]; for(var pa=100; pa<H.total-24; pa+=100) pips.push(pa);
+  pips.forEach(function(a){ var q=lineAt(a*s_).p;
+    s+="<circle cx='"+q[0]+"' cy='"+q[1]+"' r='1.4' fill='"+PAPER+"' stroke='"+INK+"' stroke-width='0.7'/>";
+    s+="<text x='"+(q[0]-5.5)+"' y='"+(q[1]+2.4)+"' font-size='6.8' font-family='Fraunces, Georgia, serif' font-style='italic' fill='"+INK+"' text-anchor='end'>"+a+"</text>"; });
+
+  // cartouche
+  s+="<g>";
+  s+="<path d='M-84,-24 L58,-24 L64,-18 L64,26 L58,32 L-84,32 L-90,26 L-90,-18 Z' fill='"+PAPER+"' stroke='"+INK+"' stroke-width='1.1'/>";
+  s+="<path d='M-86,-20 L60,-20 L60,28 L-86,28 Z' fill='none' stroke='"+INK+"' stroke-width='0.4'/>";
+  s+="<text x='-13' y='-6' font-size='"+estFs.toFixed(1)+"' font-family='Fraunces, Georgia, serif' font-weight='600' letter-spacing='3.2' fill='"+INK+"' text-anchor='middle'>"+estNm+"</text>";
+  s+="<line x1='-56' y1='1.5' x2='30' y2='1.5' stroke='"+GOLD+"' stroke-width='1'/>";
+  s+="<circle cx='-13' cy='1.5' r='1.8' fill='"+GOLD+"'/>";
+  s+="<text x='-13' y='13' font-size='7.5' font-family='Fraunces, Georgia, serif' font-style='italic' letter-spacing='1.4' fill='"+INK+"' text-anchor='middle'>Hole the "+(ORD[H.hole-1]||H.hole)+" &#183; Par "+H.par+" &#183; "+H.yards.mid+" Yards</text>";
+  s+="<text x='-13' y='24' font-size='5.6' font-family='Archivo, sans-serif' font-weight='700' letter-spacing='2.4' fill='"+GOLD+"' text-anchor='middle'>SURVEYED &amp; ENGRAVED FOR YOINK</text>";
+  s+="</g>";
+  // hole number, top right, engraved roundel
+  s+="<circle cx='78' cy='-528' r='15' fill='"+PAPER+"' stroke='"+INK+"' stroke-width='1.1'/>";
+  s+="<circle cx='78' cy='-528' r='12.2' fill='none' stroke='"+GOLD+"' stroke-width='0.9'/>";
+  s+="<text x='78' y='-520.5' font-size='"+(H.hole>9?15:19)+"' font-family='Fraunces, Georgia, serif' font-weight='600' fill='"+INK+"' text-anchor='middle'>"+H.hole+"</text>";
+  el.setAttribute('viewBox','-155 -565 260 615'); el.innerHTML=defs+s;
+
+}
+function renderLandform(el,H,meta){
+  var s_=fitPage(H);
+  var SUF='_'+el.id;
+  var safeFw=(G.fwStart!=null)?fwWidth:function(a){return 13;};
+  var R=rng((meta.key||'c')+':'+H.hole+':landform');
+  var FIELD='#0E1811', B1='#1A291D', B2='#25382A', B3='#324939', B4='#405C48', FW='#5C7D5B', GN='#7FA379', SAND='#C7AE79', WAT='#17313B', ACID='#C7F24A';
+  var defs="<defs>"
+    +"<filter id='lfsh1"+SUF+"' x='-40%' y='-40%' width='180%' height='180%'><feDropShadow dx='0' dy='4' stdDeviation='5' flood-color='#000000' flood-opacity='0.55'/></filter>"
+    +"<filter id='lfsh2"+SUF+"' x='-40%' y='-40%' width='180%' height='180%'><feDropShadow dx='0' dy='3' stdDeviation='3.5' flood-color='#000000' flood-opacity='0.5'/></filter>"
+    +"<filter id='lfsh3"+SUF+"' x='-40%' y='-40%' width='180%' height='180%'><feDropShadow dx='0' dy='2' stdDeviation='2' flood-color='#000000' flood-opacity='0.45'/></filter>"
+    +"<linearGradient id='lfw"+SUF+"' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='#224653'/><stop offset='1' stop-color='#122730'/></linearGradient>"
+    +"<radialGradient id='lfvig"+SUF+"' cx='0.5' cy='0.42' r='0.75'><stop offset='0.62' stop-color='#000000' stop-opacity='0'/><stop offset='1' stop-color='#000000' stop-opacity='0.4'/></radialGradient>"
+    +"</defs>";
+  var lfNm=stripName(meta.name||'THE COURSE');
+  var s="<rect x='-155' y='-565' width='260' height='615' fill='"+FIELD+"'/>";
+  function band(pad, fill, filt){
+    var d=smooth(corridor((G.fwStart!=null?Math.max(2,G.fwStart-(pad*26)):2), totalLen, function(a){return safeFw(a)+pad*9;}, null),true);
+    return "<g filter='url(#"+filt+")'><path d='"+d+"' fill='"+fill+"'/><path d='"+d+"' fill='none' stroke='#B8D4A8' stroke-width='1' opacity='0.10'/></g>";
+  }
+  s+=band(3.4,B2,'lfsh1');
+  s+=band(2.4,B3,'lfsh2');
+  s+=band(1.5,B4,'lfsh2');
+  // fairway plateau
+  if(G.fwStart!=null){
+    var fwD=smooth(corridor(G.fwStart,totalLen-8,safeFw,null),true);
+    s+="<g filter='url(#lfsh3"+SUF+")'><path d='"+fwD+"' fill='"+FW+"'/><path d='"+fwD+"' fill='none' stroke='#CFE4BC' stroke-width='1' opacity='0.16'/></g>";
+  }
+  // water: recessed
+  G.waters.forEach(function(w){
+    var d=smooth(w,true);
+    s+="<path d='"+d+"' fill='url(#lfw"+SUF+")'/>";
+    s+="<path d='"+smooth(inset(w.slice(0,-1),0.9),true)+"' fill='none' stroke='#000000' stroke-width='2.6' opacity='0.35'/>";
+    s+="<path d='"+d+"' fill='none' stroke='#6FA3AF' stroke-width='0.8' opacity='0.5'/>";
+  });
+  // bunkers: raised dishes
+  G.bunkers.forEach(function(b){
+    s+="<g filter='url(#lfsh3"+SUF+")'><path d='"+smooth(b,true)+"' fill='"+SAND+"'/></g>";
+    s+="<path d='"+smooth(inset(b.slice(0,-1),0.55),true)+"' fill='none' stroke='#8F7A4C' stroke-width='0.8' opacity='0.7'/>";
+  });
+  // green: the brightest step
+  s+="<g filter='url(#lfsh3"+SUF+")'><path d='"+smooth(G.green,true)+"' fill='"+GN+"'/><path d='"+smooth(G.green,true)+"' fill='none' stroke='#DFF0CE' stroke-width='1' opacity='0.25'/></g>";
+  var gp=lineAt(totalLen).p;
+  s+="<circle cx='"+gp[0]+"' cy='"+gp[1]+"' r='2' fill='"+ACID+"'/>";
+  s+="<circle cx='"+gp[0]+"' cy='"+gp[1]+"' r='4.6' fill='none' stroke='"+ACID+"' stroke-width='0.7' opacity='0.55'/>";
+  // trees: discs with long cast shadows to the east
+  treeSpots(R).forEach(function(t){
+    s+="<ellipse cx='"+(t[0]+t[2]*1.1)+"' cy='"+(t[1]+2.5)+"' rx='"+(t[2]*1.25)+"' ry='"+(t[2]*0.4)+"' fill='#000000' opacity='0.35'/>";
+    s+="<circle cx='"+t[0]+"' cy='"+t[1]+"' r='"+(t[2]*0.72)+"' fill='"+B4+"'/>";
+    s+="<circle cx='"+(t[0]-t[2]*0.2)+"' cy='"+(t[1]-t[2]*0.22)+"' r='"+(t[2]*0.4)+"' fill='"+FW+"' opacity='0.75'/>";
+    s+="<circle cx='"+(t[0]-t[2]*0.3)+"' cy='"+(t[1]-t[2]*0.3)+"' r='"+(t[2]*0.14)+"' fill='#CFE4BC' opacity='0.5'/>";
+  });
+  // tees: two quiet steps
+  G.tees.forEach(function(t){
+    s+="<g filter='url(#lfsh3"+SUF+")'><rect x='"+(t[0]-5)+"' y='"+(t[1]-2.6)+"' width='10' height='5.2' rx='1.4' fill='"+B4+"'/></g>";
+  });
+  // vignette
+  s+="<rect x='-155' y='-565' width='260' height='615' fill='url(#lfvig"+SUF+")'/>";
+  // typography: airline-quiet
+  s+="<text x='-140' y='-536' font-size='"+Math.max(6,Math.min(9,(150/Math.max(1,lfNm.length)-4.5)/0.62)).toFixed(1)+"' font-family='Archivo, sans-serif' font-weight='700' letter-spacing='4.5' fill='#D7E3CC'>"+lfNm+"</text>";
+  s+="<text x='-140' y='-522' font-size='6' font-family='Archivo, sans-serif' font-weight='500' letter-spacing='3' fill='#7C8F79'>YOINK CADDIE &#183; RENDERED FROM THE SURVEY</text>";
+  s+="<line x1='-140' y1='24' x2='-96' y2='24' stroke='#7C8F79' stroke-width='0.7'/>";
+  s+="<text x='-140' y='38' font-size='7' font-family='Archivo, sans-serif' font-weight='700' letter-spacing='2.6' fill='#D7E3CC'>N&#176; "+H.hole+" &#8212; PAR "+H.par+" &#8212; "+H.yards.mid+" YDS</text>";
+  s+="<text x='96' y='38' font-size='6' font-family='Archivo, sans-serif' font-weight='500' letter-spacing='2.4' fill='#7C8F79' text-anchor='end'>YOINK</text>";
+  el.setAttribute('viewBox','-155 -565 260 615'); el.innerHTML=defs+s;
+
+}
+function renderEvening(el,H,meta){
+  var s_=fitPage(H);
+  var SUF='_'+el.id;
+  var safeFw=(G.fwStart!=null)?fwWidth:function(a){return 13;};
+  var R=rng((meta.key||'c')+':'+H.hole+':oil');
+  var defs="<defs>"
+    +"<filter id='ob1"+SUF+"' x='-30%' y='-30%' width='160%' height='160%'><feTurbulence type='fractalNoise' baseFrequency='0.028' numOctaves='3' seed='3'/><feDisplacementMap in='SourceGraphic' scale='11'/></filter>"
+    +"<filter id='ob2"+SUF+"' x='-30%' y='-30%' width='160%' height='160%'><feTurbulence type='fractalNoise' baseFrequency='0.055' numOctaves='2' seed='8'/><feDisplacementMap in='SourceGraphic' scale='6'/></filter>"
+    +"<filter id='ob3"+SUF+"' x='-30%' y='-30%' width='160%' height='160%'><feTurbulence type='fractalNoise' baseFrequency='0.1' numOctaves='2' seed='15'/><feDisplacementMap in='SourceGraphic' scale='3'/><feGaussianBlur stdDeviation='0.4'/></filter>"
+    +"<filter id='ocanvas"+SUF+"'><feTurbulence type='fractalNoise' baseFrequency='0.9 0.5' numOctaves='2' seed='2' result='n'/><feDiffuseLighting in='n' lighting-color='#FFF6E4' surfaceScale='0.9'><feDistantLight azimuth='235' elevation='58'/></feDiffuseLighting></filter>"
+    +"<linearGradient id='ofw"+SUF+"' x1='0' y1='0.1' x2='1' y2='0.9'><stop offset='0' stop-color='#C8B36A'/><stop offset='0.45' stop-color='#8FA05B'/><stop offset='1' stop-color='#5F7A4A'/></linearGradient>"
+    +"<linearGradient id='orough"+SUF+"' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='#5E6B3C'/><stop offset='1' stop-color='#39492F'/></linearGradient>"
+    +"<linearGradient id='owat"+SUF+"' x1='0' y1='0' x2='0.9' y2='1'><stop offset='0' stop-color='#2C4A52'/><stop offset='0.55' stop-color='#1E3A44'/><stop offset='1' stop-color='#152B33'/></linearGradient>"
+    +"<radialGradient id='oglow"+SUF+"' cx='0.28' cy='0.2' r='0.95'><stop offset='0' stop-color='#FFE9B0' stop-opacity='0.32'/><stop offset='0.55' stop-color='#FFD98C' stop-opacity='0.10'/><stop offset='1' stop-color='#43333B' stop-opacity='0.30'/></radialGradient>"
+    +"</defs>";
+  var s="<rect x='-155' y='-565' width='260' height='615' fill='#4A5637'/>";
+  // ground: two broad underpainting passes
+  s+="<g filter='url(#ob1"+SUF+")'><path d='"+smooth(corridor(0,totalLen,function(a){return safeFw(a)+30;},R),true)+"' fill='url(#orough"+SUF+")'/></g>";
+  s+="<g filter='url(#ob2"+SUF+")'><path d='"+smooth(corridor(2,totalLen,function(a){return safeFw(a)+18;},R),true)+"' fill='#4E6238' opacity='0.65'/></g>";
+  // fairway: lit from the west, two passes + soft mow bands
+  if(G.fwStart!=null){
+  var fwD=smooth(corridor(G.fwStart,totalLen-8,safeFw,null),true);
+  s+="<g filter='url(#ob2"+SUF+")'><path d='"+fwD+"' fill='url(#ofw"+SUF+")'/></g>";
+  s+="<g filter='url(#ob3"+SUF+")'><path d='"+smooth(corridor(G.fwStart+6,totalLen-14,function(a){return safeFw(a)-3;},null),true)+"' fill='#D8C77E' opacity='0.22'/></g>";
+  for(var a=G.fwStart+16; a<totalLen-24; a+=26){
+    var q=lineAt(a), pp=[q.d[1],-q.d[0]], w=safeFw(a)-2;
+    s+="<g filter='url(#ob3"+SUF+")'><path d='M"+(q.p[0]-pp[0]*w)+","+(q.p[1]-pp[1]*w)+" L"+(q.p[0]+pp[0]*w)+","+(q.p[1]+pp[1]*w)+"' stroke='#F1E3A2' stroke-width='9' opacity='0.055' stroke-linecap='round'/></g>";  }
+  }
+  // water: deep, with one warm reflection
+  G.waters.forEach(function(w,wi){
+    var d=smooth(w,true);
+    s+="<g filter='url(#ob2"+SUF+")'><path d='"+d+"' fill='url(#owat"+SUF+")'/></g>";
+    s+="<g filter='url(#ob2"+SUF+")'><path d='"+d+"' fill='none' stroke='#0E2029' stroke-width='2.4' opacity='0.6'/></g>";
+    var c=[0,0]; w.forEach(function(p){c[0]+=p[0];c[1]+=p[1];}); c[0]/=w.length; c[1]/=w.length;
+    s+="<g filter='url(#ob3"+SUF+")'><ellipse cx='"+(c[0]-8)+"' cy='"+(c[1]-6)+"' rx='17' ry='5' fill='#F5D98F' opacity='"+(wi===0?0.30:0.22)+"'/></g>";
+    s+="<g filter='url(#ob3"+SUF+")'><ellipse cx='"+(c[0]-2)+"' cy='"+(c[1]+2)+"' rx='9' ry='2.6' fill='#C8E0D8' opacity='0.18'/></g>";
+  });
+  // bunkers: warm cream with a shadowed lip on the east
+  G.bunkers.forEach(function(b){
+    s+="<g filter='url(#ob3"+SUF+")'><path d='"+smooth(b,true)+"' fill='#E4CE93'/></g>";
+    s+="<g filter='url(#ob3"+SUF+")'><path d='"+smooth(inset(b.slice(0,-1),0.72),true)+"' fill='none' stroke='#9C7F4E' stroke-width='1.6' opacity='0.5'/></g>";
+    s+="<g filter='url(#ob3"+SUF+")'><path d='"+smooth(b,true)+"' fill='none' stroke='#2E3A26' stroke-width='0.9' opacity='0.4'/></g>";
+  });
+  // green: luminous
+  s+="<g filter='url(#ob2"+SUF+")'><path d='"+smooth(inset(G.green.slice(0,-1),1.25),true)+"' fill='#3E5534' opacity='0.7'/></g>";
+  s+="<g filter='url(#ob3"+SUF+")'><path d='"+smooth(G.green,true)+"' fill='#9DB86A'/></g>";
+  s+="<g filter='url(#ob3"+SUF+")'><path d='"+smooth(inset(G.green.slice(0,-1),0.6),true)+"' fill='#C9DA8C' opacity='0.6'/></g>";
+  // flag: one red dab + long thin shadow
+  var gp=lineAt(totalLen).p;
+  s+="<line x1='"+gp[0]+"' y1='"+gp[1]+"' x2='"+(gp[0]+9)+"' y2='"+(gp[1]+2.5)+"' stroke='#20301E' stroke-width='1' opacity='0.5'/>";
+  s+="<line x1='"+gp[0]+"' y1='"+gp[1]+"' x2='"+gp[0]+"' y2='"+(gp[1]-12)+"' stroke='#2A241C' stroke-width='1.1'/>";
+  s+="<path d='M"+gp[0]+","+(gp[1]-12)+" q5,1.4 7,3.6 q-4,0.6 -7,0.2 z' fill='#B8442E'/>";
+  // trees: three-layer crowns, long violet shadows east
+  treeSpots(R).forEach(function(t){
+    var r=t[2];
+    s+="<g filter='url(#ob3"+SUF+")'><ellipse cx='"+(t[0]+r*1.7)+"' cy='"+(t[1]+3)+"' rx='"+(r*1.9)+"' ry='"+(r*0.5)+"' fill='#2F2C3E' opacity='0.38'/></g>";
+    s+="<g filter='url(#ob2"+SUF+")'><ellipse cx='"+t[0]+"' cy='"+t[1]+"' rx='"+(r*1.12)+"' ry='"+(r*0.66)+"' fill='#26361F'/></g>";
+    s+="<g filter='url(#ob3"+SUF+")'><ellipse cx='"+(t[0]-r*0.18)+"' cy='"+(t[1]-r*0.16)+"' rx='"+(r*0.78)+"' ry='"+(r*0.44)+"' fill='#456030'/></g>";
+    s+="<g filter='url(#ob3"+SUF+")'><ellipse cx='"+(t[0]-r*0.38)+"' cy='"+(t[1]-r*0.34)+"' rx='"+(r*0.4)+"' ry='"+(r*0.22)+"' fill='#A8B865' opacity='0.85'/></g>";
+  });
+  // evening light + vignette over everything
+  s+="<rect x='-155' y='-565' width='260' height='615' fill='url(#oglow"+SUF+")'/>";
+  // canvas tooth
+  s+="<rect x='-155' y='-565' width='260' height='615' filter='url(#ocanvas"+SUF+")' opacity='0.16' style='mix-blend-mode:multiply'/>";
+  // painter's marks: a numeral and a signature, nothing else
+  s+="<text x='-140' y='36' font-size='26' font-family='Fraunces, Georgia, serif' font-weight='600' fill='#EFE3B4' opacity='0.9'>"+H.hole+"</text>";
+  s+="<text x='96' y='38' font-size='14' font-family='Caveat, cursive' font-weight='600' fill='#EFE3B4' opacity='0.85' text-anchor='end'>yoink.</text>";
+  el.setAttribute('viewBox','-155 -565 260 615'); el.innerHTML=defs+s;
+
+}
 // ---- style picker: injected into any Crown demo page ----
 function boot(){
   var packsEl=document.getElementById('cpacks');
@@ -254,7 +524,7 @@ function boot(){
 
   var bar=document.createElement('div'); bar.className='ykstyles';
   bar.innerHTML="<span>STYLE</span>";
-  var defs=[['book','The Book'],['crown','Gen 11']];
+  var defs=[['book','The Book'],['estate','Estate'],['landform','Landform'],['evening','Evening'],['crown','Gen 11']];
   var btns={};
   defs.forEach(function(d){
     var b=document.createElement('button'); b.className='ykchip'; b.textContent=d[1];
@@ -269,13 +539,16 @@ function boot(){
     arts.forEach(function(a){
       var H=byHole[a.hole];
       if(mode==='book' && H){ renderBook(a.el, H, meta); }
+      else if(mode==='estate' && H){ renderEstate(a.el, H, meta); }
+      else if(mode==='landform' && H){ renderLandform(a.el, H, meta); }
+      else if(mode==='evening' && H){ renderEvening(a.el, H, meta); }
       else { a.el.setAttribute('viewBox', a.vb); a.el.innerHTML=a.html; }
     });
     try{ localStorage.setItem('caddie-style', mode); }catch(e){}
   }
   var want='book';
   try{ want=localStorage.getItem('caddie-style')||'book'; }catch(e){}
-  var m=(location.hash+' '+location.search).match(/style=(book|crown)/);
+  var m=(location.hash+' '+location.search).match(/style=(book|crown|estate|landform|evening)/);
   if(m) want=m[1];
   apply(want==='crown'?'crown':'book');
 }
