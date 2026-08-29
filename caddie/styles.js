@@ -275,6 +275,8 @@ function boot(){
   }
   var want='book';
   try{ want=localStorage.getItem('caddie-style')||'book'; }catch(e){}
+  var m=(location.hash+' '+location.search).match(/style=(book|crown)/);
+  if(m) want=m[1];
   apply(want==='crown'?'crown':'book');
 }
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot); else boot();
